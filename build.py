@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument(
         "--skip-flasher",
         action="store_true",
-        help="Skip epass_flasher/bin check (not recommended)",
+        help="Skip packaging epass_flasher/bin even if it exists",
     )
     return parser.parse_args()
 
@@ -480,17 +480,16 @@ def run_cxfreeze(skip_flasher=False):
                 include_files.append((src, dll))
                 print(f"  Including FFmpeg DLL: {dll}")
 
-    # 添加烧录工具 bin 目录（flasher_dialog 直接调用的工具）
+    # flasher_dialog 运行时会直接调用 epass_flasher/bin 下的工具。
+    # 缺失时不再中止构建，保留对话框功能，由运行时自行提示或引导下载。
     flasher_bin_dir = os.path.join("epass_flasher", "bin")
-    if os.path.exists(flasher_bin_dir):
+    if os.path.exists(flasher_bin_dir) and not skip_flasher:
         include_files.append((flasher_bin_dir, os.path.join("epass_flasher", "bin")))
         print(f"  Including flasher bin dir: {flasher_bin_dir}")
-    elif not skip_flasher:
-        print("\nERROR: epass_flasher/bin/ not found, aborting")
-        print("       Use --skip-flasher to skip this check (not recommended)")
-        return False
+    elif os.path.exists(flasher_bin_dir):
+        print("  Warning: epass_flasher/bin/ exists but packaging was skipped")
     else:
-        print("  Warning: epass_flasher/bin/ not found (skipped due to --skip-flasher)")
+        print("  Warning: epass_flasher/bin/ not found; flasher dialog will require runtime setup")
 
     pyqt6_plugins = os.path.join(site_packages, "PyQt6", "Qt6", "plugins")
     if os.path.exists(pyqt6_plugins):
