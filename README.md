@@ -53,7 +53,7 @@ Arknights Pass Material Toolbox — 用于制作明日方舟电子通行证 2.1 
 - 自动保存（5 分钟间隔）与崩溃恢复
 - 自动更新检查（多源竞速：GitHub API + 代理源）
 - 临时项目（启动即可编辑，首次保存时迁移）
-- 固件烧录工具集成（FEL 模式、DFU 模式）
+- 固件烧录工具集成（FEL 模式、DFU 模式；运行时依赖 `epass_flasher/` 目录）
 - 用户设置系统（主题、字体、视频、导出、网络）
 - 快捷键帮助（F1）
 
@@ -278,7 +278,7 @@ neo-assetmaker/
 ### 本地构建
 
 ```bash
-# 完整构建（exe + 安装程序）
+# 完整构建（exe + 安装程序；缺少 `epass_flasher/bin` 时仍可继续）
 uv run python build.py
 
 # 清理构建目录
@@ -287,7 +287,7 @@ uv run python build.py --clean
 # 跳过安装程序打包
 uv run python build.py --no-installer
 
-# 跳过 flasher bin 检查
+# 即使本地存在 flasher 目录，也不把它打进安装包
 uv run python build.py --skip-flasher
 
 # 或使用批处理包装器（自动安装依赖）
