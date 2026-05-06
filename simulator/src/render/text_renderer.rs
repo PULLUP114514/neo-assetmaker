@@ -14,8 +14,7 @@ fn get_font() -> &'static Font {
     use std::sync::OnceLock;
     static FONT: OnceLock<Font> = OnceLock::new();
     FONT.get_or_init(|| {
-        Font::from_bytes(FONT_DATA, FontSettings::default())
-            .expect("Failed to load embedded font")
+        Font::from_bytes(FONT_DATA, FontSettings::default()).expect("Failed to load embedded font")
     })
 }
 
@@ -45,7 +44,8 @@ pub fn render_text_rotated_90(
     for ch in text.chars() {
         let (metrics, bitmap) = font.rasterize(ch, font_size);
         total_width += metrics.advance_width.ceil() as usize;
-        let glyph_height = (font_size.ceil() as usize).max(metrics.height + metrics.ymin.unsigned_abs() as usize);
+        let glyph_height =
+            (font_size.ceil() as usize).max(metrics.height + metrics.ymin.unsigned_abs() as usize);
         max_height = max_height.max(glyph_height);
         glyphs.push((metrics, bitmap));
     }
@@ -123,11 +123,7 @@ pub fn render_text_rotated_90(
 /// - Part before space: faux bold (double-rendered)
 /// - Part after space: regular
 /// Both parts are rendered rotated 90° and composed vertically.
-pub fn render_top_right_bar_text_rotated(
-    text: &str,
-    font_size: f32,
-    color: Color32,
-) -> ColorImage {
+pub fn render_top_right_bar_text_rotated(text: &str, font_size: f32, color: Color32) -> ColorImage {
     if let Some(space_idx) = text.find(' ') {
         let bold_part = &text[..space_idx];
         let regular_part = &text[space_idx + 1..];

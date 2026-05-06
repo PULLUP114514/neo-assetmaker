@@ -154,7 +154,9 @@ pub struct ArrowConfig {
 
 impl Default for ArrowConfig {
     fn default() -> Self {
-        Self { y_incr_per_frame: 1 }
+        Self {
+            y_incr_per_frame: 1,
+        }
     }
 }
 
@@ -430,6 +432,11 @@ impl FirmwareConfig {
 
     pub fn overlay_height(&self) -> u32 {
         self.layout.overlay.height
+    }
+
+    pub fn override_overlay_size(&mut self, width: u32, height: u32) {
+        self.layout.overlay.width = width;
+        self.layout.overlay.height = height;
     }
 
     pub fn name_start_frame(&self) -> u32 {

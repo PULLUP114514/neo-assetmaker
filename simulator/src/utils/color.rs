@@ -33,11 +33,7 @@ pub fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
 /// Blend two colors with alpha
 ///
 /// result = fg * alpha + bg * (1 - alpha)
-pub fn blend_colors(
-    bg: (u8, u8, u8),
-    fg: (u8, u8, u8),
-    alpha: f32,
-) -> (u8, u8, u8) {
+pub fn blend_colors(bg: (u8, u8, u8), fg: (u8, u8, u8), alpha: f32) -> (u8, u8, u8) {
     let alpha = alpha.clamp(0.0, 1.0);
     let inv_alpha = 1.0 - alpha;
 
@@ -49,10 +45,7 @@ pub fn blend_colors(
 }
 
 /// Blend with alpha premultiplied
-pub fn blend_rgba(
-    bg: (u8, u8, u8, u8),
-    fg: (u8, u8, u8, u8),
-) -> (u8, u8, u8, u8) {
+pub fn blend_rgba(bg: (u8, u8, u8, u8), fg: (u8, u8, u8, u8)) -> (u8, u8, u8, u8) {
     let fg_alpha = fg.3 as f32 / 255.0;
     let bg_alpha = bg.3 as f32 / 255.0;
 
@@ -63,9 +56,12 @@ pub fn blend_rgba(
         return (0, 0, 0, 0);
     }
 
-    let r = ((fg.0 as f32 * fg_alpha + bg.0 as f32 * bg_alpha * (1.0 - fg_alpha)) / out_alpha) as u8;
-    let g = ((fg.1 as f32 * fg_alpha + bg.1 as f32 * bg_alpha * (1.0 - fg_alpha)) / out_alpha) as u8;
-    let b = ((fg.2 as f32 * fg_alpha + bg.2 as f32 * bg_alpha * (1.0 - fg_alpha)) / out_alpha) as u8;
+    let r =
+        ((fg.0 as f32 * fg_alpha + bg.0 as f32 * bg_alpha * (1.0 - fg_alpha)) / out_alpha) as u8;
+    let g =
+        ((fg.1 as f32 * fg_alpha + bg.1 as f32 * bg_alpha * (1.0 - fg_alpha)) / out_alpha) as u8;
+    let b =
+        ((fg.2 as f32 * fg_alpha + bg.2 as f32 * bg_alpha * (1.0 - fg_alpha)) / out_alpha) as u8;
     let a = (out_alpha * 255.0) as u8;
 
     (r, g, b, a)
@@ -94,9 +90,15 @@ mod tests {
     #[test]
     fn test_blend_colors() {
         // Full opacity foreground
-        assert_eq!(blend_colors((0, 0, 0), (255, 255, 255), 1.0), (255, 255, 255));
+        assert_eq!(
+            blend_colors((0, 0, 0), (255, 255, 255), 1.0),
+            (255, 255, 255)
+        );
         // Full opacity background
-        assert_eq!(blend_colors((255, 255, 255), (0, 0, 0), 0.0), (255, 255, 255));
+        assert_eq!(
+            blend_colors((255, 255, 255), (0, 0, 0), 0.0),
+            (255, 255, 255)
+        );
         // 50% blend
         let result = blend_colors((0, 0, 0), (200, 200, 200), 0.5);
         assert!(result.0 >= 90 && result.0 <= 110);

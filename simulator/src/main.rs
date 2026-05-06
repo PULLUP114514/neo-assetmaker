@@ -3,11 +3,11 @@
 //! A real device preview emulator for the Arknights Pass Material Editor.
 //! Supports standalone execution or IPC communication with the Python editor.
 
+mod animation;
 mod app;
 mod config;
-mod render;
-mod animation;
 mod ipc;
+mod render;
 mod utils;
 mod video;
 
@@ -48,9 +48,41 @@ struct Args {
     #[arg(long)]
     cropbox: Option<String>,
 
+    /// Loop cropbox in format "x,y,w,h" (rotated video coordinates)
+    #[arg(long)]
+    loop_cropbox: Option<String>,
+
+    /// Intro cropbox in format "x,y,w,h" (rotated video coordinates)
+    #[arg(long)]
+    intro_cropbox: Option<String>,
+
     /// Video rotation in degrees (0, 90, 180, 270)
     #[arg(long, default_value = "0")]
     rotation: i32,
+
+    /// Loop video rotation in degrees (0, 90, 180, 270)
+    #[arg(long)]
+    loop_rotation: Option<i32>,
+
+    /// Intro video rotation in degrees (0, 90, 180, 270)
+    #[arg(long)]
+    intro_rotation: Option<i32>,
+
+    /// Loop preview start frame
+    #[arg(long)]
+    loop_start_frame: Option<u32>,
+
+    /// Loop preview end frame (inclusive)
+    #[arg(long)]
+    loop_end_frame: Option<u32>,
+
+    /// Intro preview start frame
+    #[arg(long)]
+    intro_start_frame: Option<u32>,
+
+    /// Intro preview end frame (inclusive)
+    #[arg(long)]
+    intro_end_frame: Option<u32>,
 
     /// Enable debug logging
     #[arg(short, long)]
@@ -61,14 +93,27 @@ struct Args {
     theme: String,
 }
 
+fn parse_cropbox(value: Option<&str>) -> Option<(u32, u32, u32, u32)> {
+    value.and_then(|s| {
+        let parts: Vec<u32> = s.split(',').filter_map(|p| p.parse().ok()).collect();
+        if parts.len() == 4 {
+            Some((parts[0], parts[1], parts[2], parts[3]))
+        } else {
+            None
+        }
+    })
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
     // Initialize logging
-    let level = if args.debug { Level::DEBUG } else { Level::INFO };
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(level)
-        .finish();
+    let level = if args.debug {
+        Level::DEBUG
+    } else {
+        Level::INFO
+    };
+    let subscriber = FmtSubscriber::builder().with_max_level(level).finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
     info!("Arknights Pass Simulator starting...");
@@ -86,7 +131,10 @@ fn main() -> Result<()> {
             }
             Err(e) => {
                 tracing::error!("Failed to load config: {:?}", e);
-                (None, Some(format!("配置加载失败: {:?}\n路径: {:?}", e, config_path)))
+                (
+                    None,
+                    Some(format!("配置加载失败: {:?}\n路径: {:?}", e, config_path)),
+                )
             }
         }
     } else {
@@ -122,16 +170,10 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    // Parse cropbox
-    let cropbox: Option<(u32, u32, u32, u32)> = args.cropbox.and_then(|s| {
-        let parts: Vec<u32> = s.split(',').filter_map(|p| p.parse().ok()).collect();
-        if parts.len() == 4 {
-            Some((parts[0], parts[1], parts[2], parts[3]))
-        } else {
-            None
-        }
-    });
-    let rotation = args.rotation;
+    let loop_cropbox = parse_cropbox(args.loop_cropbox.as_deref().or(args.cropbox.as_deref()));
+    let intro_cropbox = parse_cropbox(args.intro_cropbox.as_deref());
+    let loop_rotation = args.loop_rotation.unwrap_or(args.rotation);
+    let intro_rotation = args.intro_rotation.unwrap_or(0);
     let is_dark_theme = args.theme != "light";
 
     // Run the application
@@ -146,8 +188,14 @@ fn main() -> Result<()> {
                 app_dir,
                 args.pipe,
                 args.stdio,
-                cropbox,
-                rotation,
+                loop_cropbox,
+                loop_rotation,
+                args.loop_start_frame,
+                args.loop_end_frame,
+                intro_cropbox,
+                intro_rotation,
+                args.intro_start_frame,
+                args.intro_end_frame,
                 is_dark_theme,
                 config_error,
             )))

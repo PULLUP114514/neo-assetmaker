@@ -629,7 +629,8 @@ class MainWindow(QMainWindow):
         self.video_preview.frame_changed.connect(self._on_frame_changed)
         self.video_preview.playback_state_changed.connect(
             self._on_playback_changed)
-        self.video_preview.rotation_changed.connect(self.timeline.set_rotation)
+        self.video_preview.rotation_changed.connect(
+            self._on_loop_rotation_changed)
 
         self.btn_firmware.clicked.connect(self._on_sidebar_firmware)
         self.btn_material.clicked.connect(self._on_sidebar_material)
@@ -1415,6 +1416,7 @@ class MainWindow(QMainWindow):
             # 模拟器从磁盘读取 epconfig.json（不共享 GUI 内存），
             # 而导出直接使用 video_preview.video_path（内存中的当前视频）。
             # 如果用户修改了视频但未保存，模拟器会打开旧视频 → 画面完全不同。
+            self._snapshot_active_timeline_state()
             if self._is_modified:
                 if self._project_path:
                     try:
@@ -1440,7 +1442,7 @@ class MainWindow(QMainWindow):
 
             config_path = self._project_path
 
-            if not os.path.exists(config_path):
+            if not config_path or not os.path.exists(config_path):
                 QMessageBox.warning(
                     self, "警告",
                     "请先保存项目配置\n\n"
@@ -1470,7 +1472,7 @@ class MainWindow(QMainWindow):
 
             # 图片模式：生成临时视频供模拟器使用
             config_for_simulator = config_path
-            if self._config.loop.is_image and loop_file:
+            if False and self._config.loop.is_image and loop_file:
                 try:
                     import av
                     import cv2
@@ -1523,6 +1525,77 @@ class MainWindow(QMainWindow):
                 f"config_video={self._config.loop.file}, "
                 f"gui_video={self.video_preview.video_path}")
 
+            loop_state = self._collect_preview_media_state(
+                self.video_preview,
+                self._config.loop.file,
+                default_to_full=True,
+                is_image=self._config.loop.is_image,
+            )
+            if loop_state is None:
+                resolved_video_path = self._resolve_media_path(self._config.loop.file)
+                QMessageBox.warning(
+                    self, "视频文件不存在",
+                    f"模拟器预览需要的视频文件未找到：\n\n"
+                    f"配置路径: {self._config.loop.file}\n"
+                    f"解析路径: {resolved_video_path}\n"
+                    f"基础目录: {self._base_dir}\n\n"
+                    f"请确认视频文件存在或重新选择视频"
+                )
+                return
+
+            intro_state = None
+            if self._config.intro.enabled and self._config.intro.file:
+                intro_state = self._collect_preview_media_state(
+                    self.intro_preview,
+                    self._config.intro.file,
+                    default_to_full=True,
+                )
+                if intro_state is None:
+                    resolved_intro_path = self._resolve_media_path(
+                        self._config.intro.file
+                    )
+                    QMessageBox.warning(
+                        self, "入场视频文件不存在",
+                        f"模拟器预览需要的入场视频文件未找到：\n\n"
+                        f"配置路径: {self._config.intro.file}\n"
+                        f"解析路径: {resolved_intro_path}\n"
+                        f"基础目录: {self._base_dir}\n\n"
+                        f"请确认入场视频文件存在或重新选择视频"
+                    )
+                    return
+
+            config_for_simulator = config_path
+            if self._config.loop.is_image:
+                try:
+                    config_for_simulator, loop_state = (
+                        self._bake_loop_image_for_simulator(loop_state)
+                    )
+                    logger.info(
+                        "循环图片已烘焙为临时视频: %s", loop_state["path"]
+                    )
+                except Exception as e:
+                    logger.warning(f"图片转临时视频失败: {e}")
+                    QMessageBox.warning(
+                        self, "提示",
+                        f"图片模式暂不支持模拟器预览\n\n"
+                        f"原因：图片转换失败：{e}\n"
+                        f"建议先导出素材后再使用模拟器预览"
+                    )
+                    return
+
+            cropbox = loop_state["cropbox"]
+            rotation = loop_state["rotation"]
+            loop_end_frame = max(
+                loop_state["start_frame"], loop_state["end_frame"] - 1
+            )
+
+            logger.info(
+                "启动模拟器: "
+                f"loop={loop_state}, intro={intro_state}, "
+                f"config_video={self._config.loop.file}, "
+                f"gui_video={self.video_preview.video_path}"
+            )
+
             popen_kwargs = {'stderr': subprocess.PIPE}
             if sys.platform == 'win32':
                 popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -1546,15 +1619,32 @@ class MainWindow(QMainWindow):
             from qfluentwidgets import isDarkTheme
             theme = "dark" if isDarkTheme() else "light"
 
-            proc = subprocess.Popen([
+            command = [
                 simulator_path,
                 "--config", config_for_simulator,
                 "--base-dir", self._base_dir,
                 "--app-dir", self._app_dir,
-                "--cropbox", f"{cropbox[0]},{cropbox[1]},{cropbox[2]},{cropbox[3]}",
-                "--rotation", str(rotation),
+                "--loop-cropbox",
+                f"{cropbox[0]},{cropbox[1]},{cropbox[2]},{cropbox[3]}",
+                "--loop-rotation", str(rotation),
+                "--loop-start-frame", str(loop_state["start_frame"]),
+                "--loop-end-frame", str(loop_end_frame),
                 "--theme", theme,
-            ], **popen_kwargs)
+            ]
+            if intro_state is not None:
+                intro_cropbox = intro_state["cropbox"]
+                intro_end_frame = max(
+                    intro_state["start_frame"], intro_state["end_frame"] - 1
+                )
+                command.extend([
+                    "--intro-cropbox",
+                    f"{intro_cropbox[0]},{intro_cropbox[1]},{intro_cropbox[2]},{intro_cropbox[3]}",
+                    "--intro-rotation", str(intro_state["rotation"]),
+                    "--intro-start-frame", str(intro_state["start_frame"]),
+                    "--intro-end-frame", str(intro_end_frame),
+                ])
+
+            proc = subprocess.Popen(command, **popen_kwargs)
 
             logger.info(f"模拟器已启动: {simulator_path}")
 
@@ -2787,6 +2877,228 @@ class MainWindow(QMainWindow):
             pass
         preview.frame_changed.connect(self._on_video_frame_changed)
 
+    def _is_timeline_bound_to(self, preview: VideoPreviewWidget) -> bool:
+        return self._timeline_preview is preview
+
+    def _snapshot_active_timeline_state(self):
+        if self._timeline_preview is self.intro_preview:
+            self._intro_in_out = (
+                self.timeline.get_in_point(),
+                self.timeline.get_out_point(),
+            )
+        elif self._timeline_preview is self.video_preview:
+            self._loop_in_out = (
+                self.timeline.get_in_point(),
+                self.timeline.get_out_point(),
+            )
+
+    def _get_cached_in_out(
+        self, preview: VideoPreviewWidget
+    ) -> tuple[int, int]:
+        if preview is self.intro_preview:
+            return self._intro_in_out
+        return self._loop_in_out
+
+    def _get_trim_bounds(
+        self,
+        preview: VideoPreviewWidget,
+        cached_in_out: Optional[tuple[int, int]] = None,
+        *,
+        total_frames: Optional[int] = None,
+        default_to_full: bool = False,
+    ) -> tuple[int, int]:
+        resolved_total = total_frames
+        if resolved_total is None:
+            resolved_total = getattr(preview, "total_frames", 0)
+        resolved_total = max(1, resolved_total or 0)
+
+        in_point, out_point = cached_in_out or self._get_cached_in_out(preview)
+        if default_to_full and (in_point, out_point) == (0, 0) and resolved_total > 1:
+            in_point, out_point = (0, resolved_total - 1)
+
+        in_point = max(0, min(in_point, resolved_total - 1))
+        out_point = max(in_point, min(out_point, resolved_total - 1))
+        return in_point, min(resolved_total, out_point + 1)
+
+    def _resolve_media_path(self, file_path: str) -> str:
+        if not file_path:
+            return ""
+        if os.path.isabs(file_path):
+            return file_path
+        return os.path.join(self._base_dir, file_path)
+
+    def _probe_video_metadata(
+        self, video_path: str
+    ) -> tuple[int, int, int, float]:
+        import av
+
+        container = av.open(video_path)
+        try:
+            stream = container.streams.video[0]
+            fps = float(stream.average_rate) if stream.average_rate else 30.0
+            width = stream.width
+            height = stream.height
+            total_frames = stream.frames
+            if total_frames == 0 and stream.duration and stream.time_base:
+                total_frames = max(
+                    1, int(float(stream.duration * stream.time_base) * fps)
+                )
+            if total_frames == 0 and container.duration is not None:
+                total_frames = max(
+                    1, int((container.duration / av.time_base) * fps)
+                )
+            if total_frames == 0:
+                total_frames = 1
+            return width, height, total_frames, fps
+        finally:
+            container.close()
+
+    def _probe_image_size(self, image_path: str) -> tuple[int, int]:
+        import cv2
+        import numpy as np
+
+        img_data = np.fromfile(image_path, dtype=np.uint8)
+        frame = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise RuntimeError(f"无法读取图片: {image_path}")
+        return frame.shape[1], frame.shape[0]
+
+    def _preview_has_loaded_media(self, preview: VideoPreviewWidget) -> bool:
+        return bool(
+            getattr(preview, "video_path", "")
+            and getattr(preview, "total_frames", 0) > 0
+        )
+
+    def _collect_preview_media_state(
+        self,
+        preview: VideoPreviewWidget,
+        configured_path: str,
+        *,
+        default_to_full: bool = False,
+        is_image: bool = False,
+    ) -> Optional[dict]:
+        preview_path = getattr(preview, "video_path", "")
+        if (
+            self._preview_has_loaded_media(preview)
+            and preview_path
+            and os.path.exists(preview_path)
+        ):
+            total_frames = max(1, int(preview.total_frames or 0))
+            start_frame, end_frame = self._get_trim_bounds(
+                preview,
+                total_frames=total_frames,
+            )
+            return {
+                "path": preview_path,
+                "cropbox": preview.get_cropbox_in_rotated_space(),
+                "rotation": preview.get_rotation(),
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "fps": float(preview.video_fps or 30.0),
+                "total_frames": total_frames,
+                "width": getattr(preview, "video_width", 0),
+                "height": getattr(preview, "video_height", 0),
+            }
+
+        resolved_path = self._resolve_media_path(configured_path)
+        if not resolved_path or not os.path.exists(resolved_path):
+            return None
+
+        if is_image:
+            width, height = self._probe_image_size(resolved_path)
+            total_frames = max(1, int(getattr(preview, "total_frames", 0) or 150))
+            fps = float(getattr(preview, "video_fps", 0) or 30.0)
+        else:
+            width, height, total_frames, fps = self._probe_video_metadata(resolved_path)
+
+        start_frame, end_frame = self._get_trim_bounds(
+            preview,
+            total_frames=total_frames,
+            default_to_full=default_to_full,
+        )
+        return {
+            "path": resolved_path,
+            "cropbox": (0, 0, width, height),
+            "rotation": 0,
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "fps": fps,
+            "total_frames": total_frames,
+            "width": width,
+            "height": height,
+        }
+
+    def _bake_loop_image_for_simulator(self, loop_state: dict) -> tuple[str, dict]:
+        import av
+        import cv2
+        import numpy as np
+
+        image_path = loop_state["path"]
+        img_data = np.fromfile(image_path, dtype=np.uint8)
+        frame_bgr = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
+        if frame_bgr is None:
+            raise RuntimeError(f"无法读取图片: {image_path}")
+
+        rotation = int(loop_state["rotation"])
+        if rotation:
+            frame_bgr = VideoPreviewWidget.apply_rotation_to_frame(
+                frame_bgr, rotation
+            )
+
+        frame_h, frame_w = frame_bgr.shape[:2]
+        x, y, w, h = loop_state["cropbox"]
+        x = max(0, min(int(x), frame_w - 1))
+        y = max(0, min(int(y), frame_h - 1))
+        w = max(1, min(int(w), frame_w - x))
+        h = max(1, min(int(h), frame_h - y))
+        cropped = frame_bgr[y:y + h, x:x + w]
+        if cropped.size == 0:
+            raise RuntimeError("循环图片裁切区域无效")
+
+        target_w, target_h = self._get_target_resolution()
+        baked_frame = cv2.resize(cropped, (target_w, target_h))
+
+        stream_fps = max(1, int(round(float(loop_state.get("fps", 30.0) or 30.0))))
+        total_frames = max(
+            1, int(loop_state.get("total_frames", stream_fps) or stream_fps)
+        )
+
+        temp_video = os.path.join(self._base_dir, "_sim_temp.mp4")
+        container = av.open(temp_video, mode="w")
+        try:
+            stream = container.add_stream("libx264", rate=stream_fps)
+            stream.width = target_w
+            stream.height = target_h
+            stream.pix_fmt = "yuv420p"
+
+            rgb_frame = cv2.cvtColor(baked_frame, cv2.COLOR_BGR2RGB)
+            for _ in range(total_frames):
+                av_frame = av.VideoFrame.from_ndarray(rgb_frame, format="rgb24")
+                for packet in stream.encode(av_frame):
+                    container.mux(packet)
+            for packet in stream.encode():
+                container.mux(packet)
+        finally:
+            container.close()
+
+        temp_config = self._config.copy()
+        temp_config.loop.file = os.path.basename(temp_video)
+        temp_config.loop.is_image = False
+        temp_config_path = os.path.join(self._base_dir, "_sim_temp_config.json")
+        temp_config.save_to_file(temp_config_path)
+
+        baked_state = dict(loop_state)
+        baked_state.update(
+            path=temp_video,
+            cropbox=(0, 0, target_w, target_h),
+            rotation=0,
+            width=target_w,
+            height=target_h,
+            fps=float(stream_fps),
+            total_frames=total_frames,
+        )
+        return temp_config_path, baked_state
+
     def _on_video_frame_changed(self, frame):
         """视频帧变更时更新截取帧编辑页面"""
         if self.preview_tabs.currentIndex() == 1 and hasattr(self,
@@ -2805,12 +3117,7 @@ class MainWindow(QMainWindow):
     def _on_preview_tab_changed(self, index: int):
         """预览标签页切换"""
         # 保存当前 in/out 到正确的位置（基于当前连接的预览器）
-        current_in = self.timeline.get_in_point()
-        current_out = self.timeline.get_out_point()
-        if self._timeline_preview is self.intro_preview:
-            self._intro_in_out = (current_in, current_out)
-        elif self._timeline_preview is self.video_preview:
-            self._loop_in_out = (current_in, current_out)
+        self._snapshot_active_timeline_state()
 
         if index == 0:
             self._connect_timeline_to_preview(self.intro_preview)
@@ -2823,10 +3130,14 @@ class MainWindow(QMainWindow):
                     self,
                     '_current_video_preview') and self._current_video_preview:
                 logger.debug("连接时间轴到保存的视频预览器")
-                self._connect_timeline_to_preview(self._current_video_preview)
+                source_preview = self._current_video_preview
             else:
                 logger.debug("连接时间轴到默认视频预览器")
-                self._connect_timeline_to_preview(self.video_preview)
+                source_preview = self.video_preview
+            self._connect_timeline_to_preview(source_preview)
+            cached_in, cached_out = self._get_cached_in_out(source_preview)
+            self.timeline.set_in_point(cached_in)
+            self.timeline.set_out_point(cached_out)
             self.timeline.show()
             logger.debug("切换到截取帧编辑")
         elif index == 2:
@@ -2844,7 +3155,7 @@ class MainWindow(QMainWindow):
 
     def _on_intro_video_loaded(self, total_frames: int, fps: float):
         """入场视频加载完成"""
-        if self.preview_tabs.currentIndex() == 0:
+        if self._is_timeline_bound_to(self.intro_preview):
             self.timeline.set_total_frames(total_frames)
             self.timeline.set_fps(fps)
             self.timeline.set_in_point(0)
@@ -2855,17 +3166,22 @@ class MainWindow(QMainWindow):
 
     def _on_intro_frame_changed(self, frame: int):
         """入场视频帧变更"""
-        if self.preview_tabs.currentIndex() in (0, 1):
+        if self._is_timeline_bound_to(self.intro_preview):
             self.timeline.set_current_frame(frame)
 
     def _on_intro_playback_changed(self, is_playing: bool):
         """入场视频播放状态变更"""
-        if self.preview_tabs.currentIndex() in (0, 1):
+        if self._is_timeline_bound_to(self.intro_preview):
             self.timeline.set_playing(is_playing)
 
     def _on_intro_rotation_changed(self, rotation: int):
         """入场视频旋转变更"""
-        if self.preview_tabs.currentIndex() == 0:
+        if self._is_timeline_bound_to(self.intro_preview):
+            self.timeline.set_rotation(rotation)
+
+    def _on_loop_rotation_changed(self, rotation: int):
+        """寰幆瑙嗛鏃嬭浆鍙樻洿"""
+        if self._is_timeline_bound_to(self.video_preview):
             self.timeline.set_rotation(rotation)
 
     def _on_set_in_point(self):
@@ -3088,20 +3404,23 @@ class MainWindow(QMainWindow):
 
     def _on_video_loaded(self, total_frames: int, fps: float):
         """视频加载完成"""
-        self.timeline.set_total_frames(total_frames)
-        self.timeline.set_fps(fps)
-        self.timeline.set_in_point(0)
-        self.timeline.set_out_point(total_frames - 1)
+        if self._is_timeline_bound_to(self.video_preview):
+            self.timeline.set_total_frames(total_frames)
+            self.timeline.set_fps(fps)
+            self.timeline.set_in_point(0)
+            self.timeline.set_out_point(total_frames - 1)
         self._loop_in_out = (0, total_frames - 1)
         self.status_bar.showMessage(f"视频已加载: {total_frames} 帧, {fps:.1f} FPS")
 
     def _on_frame_changed(self, frame: int):
         """帧变更"""
-        self.timeline.set_current_frame(frame)
+        if self._is_timeline_bound_to(self.video_preview):
+            self.timeline.set_current_frame(frame)
 
     def _on_playback_changed(self, is_playing: bool):
         """播放状态变更"""
-        self.timeline.set_playing(is_playing)
+        if self._is_timeline_bound_to(self.video_preview):
+            self.timeline.set_playing(is_playing)
 
     def _on_capture_frame(self):
         """截取当前视频帧 → 加载到截取帧编辑标签页"""
@@ -3232,6 +3551,7 @@ class MainWindow(QMainWindow):
         from core.export_service import VideoExportParams
         from core.image_processor import ImageProcessor
 
+        self._snapshot_active_timeline_state()
         data = {}
 
         icon_path = self._config.icon
@@ -3245,78 +3565,43 @@ class MainWindow(QMainWindow):
                         logo_img)
 
         if self._config.loop.is_image:
-            if hasattr(self, '_loop_image_path') and self._loop_image_path:
-                data['loop_image_path'] = self._loop_image_path
+            loop_image_path = getattr(self, '_loop_image_path', "") or \
+                self._resolve_media_path(self._config.loop.file)
+            if loop_image_path and os.path.exists(loop_image_path):
+                data['loop_image_path'] = loop_image_path
                 data['is_loop_image'] = True
-        elif self.video_preview.video_path:
-            cropbox = self.video_preview.get_cropbox_in_rotated_space()
-            rotation = self.video_preview.get_rotation()
-            in_point = self.timeline.get_in_point()
-            out_point = self.timeline.get_out_point()
-
-            data['loop_video_params'] = VideoExportParams(
-                video_path=self.video_preview.video_path,
-                cropbox=cropbox,
-                start_frame=in_point,
-                end_frame=out_point,
-                fps=self.video_preview.video_fps,
-                resolution=self._config.screen.value,
-                rotation=rotation
+        elif self._config.loop.file:
+            loop_state = self._collect_preview_media_state(
+                self.video_preview,
+                self._config.loop.file,
             )
+            if loop_state:
+                data['loop_video_params'] = VideoExportParams(
+                    video_path=loop_state['path'],
+                    cropbox=loop_state['cropbox'],
+                    start_frame=loop_state['start_frame'],
+                    end_frame=loop_state['end_frame'],
+                    fps=loop_state['fps'],
+                    resolution=self._config.screen.value,
+                    rotation=loop_state['rotation']
+                )
 
         if self._config.intro.enabled and self._config.intro.file:
-            if self.intro_preview.video_path:
-                cropbox = self.intro_preview.get_cropbox_in_rotated_space()
-                rotation = self.intro_preview.get_rotation()
-
+            intro_state = self._collect_preview_media_state(
+                self.intro_preview,
+                self._config.intro.file,
+                default_to_full=True,
+            )
+            if intro_state:
                 data['intro_video_params'] = VideoExportParams(
-                    video_path=self.intro_preview.video_path,
-                    cropbox=cropbox,
-                    start_frame=0,
-                    end_frame=self.intro_preview.total_frames,
-                    fps=self.intro_preview.video_fps,
+                    video_path=intro_state['path'],
+                    cropbox=intro_state['cropbox'],
+                    start_frame=intro_state['start_frame'],
+                    end_frame=intro_state['end_frame'],
+                    fps=intro_state['fps'],
                     resolution=self._config.screen.value,
-                    rotation=rotation
+                    rotation=intro_state['rotation']
                 )
-            else:
-                intro_path = self._config.intro.file
-                if not os.path.isabs(intro_path):
-                    intro_path = os.path.join(self._base_dir, intro_path)
-
-                if os.path.exists(intro_path):
-                    try:
-                        import av
-                    except ImportError:
-                        logger.warning("PyAV 不可用，跳过片头视频元数据读取")
-                        av = None
-
-                    try:
-                        if av is None:
-                            raise RuntimeError("PyAV unavailable")
-                        container = av.open(intro_path)
-                        stream = container.streams.video[0]
-                        fps = float(stream.average_rate) if stream.average_rate else 30.0
-                        width = stream.width
-                        height = stream.height
-                        total_frames = stream.frames
-                        if total_frames == 0 and stream.duration and stream.time_base:
-                            total_frames = max(1, int(
-                                float(stream.duration * stream.time_base) * fps))
-                        if total_frames == 0:
-                            total_frames = 1
-                        container.close()
-
-                        data['intro_video_params'] = VideoExportParams(
-                            video_path=intro_path,
-                            cropbox=(0, 0, width, height),
-                            start_frame=0,
-                            end_frame=total_frames,
-                            fps=fps,
-                            resolution=self._config.screen.value,
-                            rotation=0
-                        )
-                    except Exception as e:
-                        logger.warning(f"无法读取片头视频元数据: {e}")
 
         from config.epconfig import OverlayType
         if self._config.overlay.type == OverlayType.IMAGE:

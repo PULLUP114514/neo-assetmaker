@@ -2,9 +2,9 @@
 //!
 //! Defines message formats for communication with the Python editor.
 
-use serde::{Deserialize, Serialize};
-use crate::config::EPConfig;
 use crate::app::state::PlayState;
+use crate::config::EPConfig;
+use serde::{Deserialize, Serialize};
 
 /// Control commands from editor to simulator
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,13 +27,9 @@ pub enum ControlCommand {
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
     // === Editor -> Simulator ===
-
     /// Load configuration
     #[serde(rename = "load_config")]
-    LoadConfig {
-        config: EPConfig,
-        base_dir: String,
-    },
+    LoadConfig { config: EPConfig, base_dir: String },
 
     /// Control command
     #[serde(rename = "control")]
@@ -51,7 +47,6 @@ pub enum IpcMessage {
     Shutdown,
 
     // === Simulator -> Editor ===
-
     /// State update notification
     #[serde(rename = "state_update")]
     StateUpdate {
@@ -66,10 +61,7 @@ pub enum IpcMessage {
 
     /// Error occurred
     #[serde(rename = "error")]
-    Error {
-        code: i32,
-        message: String,
-    },
+    Error { code: i32, message: String },
 }
 
 impl IpcMessage {

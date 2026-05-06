@@ -285,7 +285,12 @@ impl SimulatorState {
     }
 
     /// Start playback
-    pub fn start_playback(&mut self, has_intro: bool, transition_type: TransitionType, total_frames: u32) {
+    pub fn start_playback(
+        &mut self,
+        has_intro: bool,
+        transition_type: TransitionType,
+        total_frames: u32,
+    ) {
         self.is_playing = true;
         self.frame_counter = 0;
         self.animation.reset();
@@ -331,10 +336,22 @@ mod tests {
 
     #[test]
     fn test_transition_phase() {
-        assert_eq!(TransitionPhase::from_progress(0.0), TransitionPhase::PhaseIn);
-        assert_eq!(TransitionPhase::from_progress(0.5), TransitionPhase::PhaseHold);
-        assert_eq!(TransitionPhase::from_progress(0.8), TransitionPhase::PhaseOut);
-        assert_eq!(TransitionPhase::from_progress(1.0), TransitionPhase::PhaseDone);
+        assert_eq!(
+            TransitionPhase::from_progress(0.0),
+            TransitionPhase::PhaseIn
+        );
+        assert_eq!(
+            TransitionPhase::from_progress(0.5),
+            TransitionPhase::PhaseHold
+        );
+        assert_eq!(
+            TransitionPhase::from_progress(0.8),
+            TransitionPhase::PhaseOut
+        );
+        assert_eq!(
+            TransitionPhase::from_progress(1.0),
+            TransitionPhase::PhaseDone
+        );
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //!
 //! Manages animation state updates for the overlay.
 
-use crate::config::FirmwareConfig;
 use crate::app::state::{AnimationState, EinkState};
+use crate::config::FirmwareConfig;
 use crate::render::bezier::ease_in_out;
 
 /// Animation controller
@@ -152,12 +152,14 @@ impl AnimationController {
         // Upper line: starts at frame 80, 40 frames
         let upper_start = self.config.animation.bars_lines.upper_line.start_frame;
         let upper_frames = self.config.animation.bars_lines.upper_line.frame_count;
-        state.upper_line_width = self.calculate_bar_width(frame, upper_start, upper_frames, line_width);
+        state.upper_line_width =
+            self.calculate_bar_width(frame, upper_start, upper_frames, line_width);
 
         // Lower line: starts at frame 90, 40 frames
         let lower_start = self.config.animation.bars_lines.lower_line.start_frame;
         let lower_frames = self.config.animation.bars_lines.lower_line.frame_count;
-        state.lower_line_width = self.calculate_bar_width(frame, lower_start, lower_frames, line_width);
+        state.lower_line_width =
+            self.calculate_bar_width(frame, lower_start, lower_frames, line_width);
     }
 
     fn calculate_bar_width(&self, frame: u32, start: u32, frame_count: u32, target: u32) -> u32 {

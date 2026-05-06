@@ -2,17 +2,17 @@
 //!
 //! Provides video frame decoding functionality using FFmpeg.
 
-use std::path::Path;
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use image::RgbImage;
-use tracing::{info, warn, error};
+use std::path::Path;
+use tracing::{error, info, warn};
 
-use ffmpeg_next as ffmpeg;
 use ffmpeg::format::input;
+use ffmpeg::format::Pixel;
 use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{Context as Scaler, Flags};
 use ffmpeg::util::frame::video::Video as VideoFrame;
-use ffmpeg::format::Pixel;
+use ffmpeg_next as ffmpeg;
 
 /// Video decoder that extracts frames from video files using FFmpeg
 pub struct VideoDecoder {
@@ -89,9 +89,12 @@ impl VideoDecoder {
         };
 
         // Create decoder
-        let context_decoder = ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
-            .context("Failed to create decoder context")?;
-        let mut decoder = context_decoder.decoder().video()
+        let context_decoder =
+            ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
+                .context("Failed to create decoder context")?;
+        let mut decoder = context_decoder
+            .decoder()
+            .video()
             .context("Failed to create video decoder")?;
 
         let mut src_width = decoder.width();
@@ -107,8 +110,13 @@ impl VideoDecoder {
         // Try with decoder-reported format first; if it fails (e.g. pix_fmt=NONE before
         // first decode), probe the first frame to get the actual format and retry.
         let rgb_scaler = match Scaler::get(
-            src_format, src_width, src_height,
-            Pixel::RGB24, src_width, src_height, Flags::BILINEAR,
+            src_format,
+            src_width,
+            src_height,
+            Pixel::RGB24,
+            src_width,
+            src_height,
+            Flags::BILINEAR,
         ) {
             Ok(scaler) => scaler,
             Err(initial_err) => {
@@ -127,17 +135,28 @@ impl VideoDecoder {
                         decoder.flush();
 
                         Scaler::get(
-                            src_format, src_width, src_height,
-                            Pixel::RGB24, src_width, src_height, Flags::BILINEAR,
-                        ).with_context(|| format!(
-                            "视频像素格式不受支持\n格式: {:?}\n分辨率: {}x{}\n文件: {}",
-                            src_format, src_width, src_height, path
-                        ))?
+                            src_format,
+                            src_width,
+                            src_height,
+                            Pixel::RGB24,
+                            src_width,
+                            src_height,
+                            Flags::BILINEAR,
+                        )
+                        .with_context(|| {
+                            format!(
+                                "视频像素格式不受支持\n格式: {:?}\n分辨率: {}x{}\n文件: {}",
+                                src_format, src_width, src_height, path
+                            )
+                        })?
                     }
                     None => {
                         anyhow::bail!(
                             "无法解码视频帧\n格式: {:?}\n分辨率: {}x{}\n文件: {}",
-                            src_format, src_width, src_height, path
+                            src_format,
+                            src_width,
+                            src_height,
+                            path
                         );
                     }
                 }
@@ -166,26 +185,32 @@ impl VideoDecoder {
             };
 
             // Create final scaler from crop size to target size
-            Some(Scaler::get(
-                Pixel::RGB24,
-                final_w,
-                final_h,
-                Pixel::RGB24,
-                target_width,
-                target_height,
-                Flags::BILINEAR,
-            ).context("Failed to create final scaler")?)
+            Some(
+                Scaler::get(
+                    Pixel::RGB24,
+                    final_w,
+                    final_h,
+                    Pixel::RGB24,
+                    target_width,
+                    target_height,
+                    Flags::BILINEAR,
+                )
+                .context("Failed to create final scaler")?,
+            )
         } else {
             // No cropbox or rotation, create a direct scaler
-            Some(Scaler::get(
-                Pixel::RGB24,
-                src_width,
-                src_height,
-                Pixel::RGB24,
-                target_width,
-                target_height,
-                Flags::BILINEAR,
-            ).context("Failed to create final scaler")?)
+            Some(
+                Scaler::get(
+                    Pixel::RGB24,
+                    src_width,
+                    src_height,
+                    Pixel::RGB24,
+                    target_width,
+                    target_height,
+                    Flags::BILINEAR,
+                )
+                .context("Failed to create final scaler")?,
+            )
         };
 
         Ok(Self {
@@ -334,7 +359,8 @@ impl VideoDecoder {
                 let src_start = y * (final_w as usize) * 3;
                 let dst_start = y * frame_stride;
                 let row_len = (final_w as usize) * 3;
-                frame_data[dst_start..dst_start + row_len].copy_from_slice(&final_data[src_start..src_start + row_len]);
+                frame_data[dst_start..dst_start + row_len]
+                    .copy_from_slice(&final_data[src_start..src_start + row_len]);
             }
 
             // Scale to target size
@@ -372,7 +398,16 @@ impl VideoDecoder {
     }
 
     /// Crop a frame from RGB24 data with boundary safety checks
-    fn crop_frame(&self, data: &[u8], src_width: u32, src_height: u32, x: u32, y: u32, w: u32, h: u32) -> (Vec<u8>, u32, u32) {
+    fn crop_frame(
+        &self,
+        data: &[u8],
+        src_width: u32,
+        src_height: u32,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+    ) -> (Vec<u8>, u32, u32) {
         let src_stride = (src_width * 3) as usize;
 
         // Boundary safety check - clamp crop region to source dimensions
@@ -382,13 +417,18 @@ impl VideoDecoder {
         let safe_h = h.min(src_height.saturating_sub(safe_y));
 
         if safe_w == 0 || safe_h == 0 {
-            warn!("Crop region is empty after boundary clamping: ({}, {}, {}, {}) on {}x{}", x, y, w, h, src_width, src_height);
+            warn!(
+                "Crop region is empty after boundary clamping: ({}, {}, {}, {}) on {}x{}",
+                x, y, w, h, src_width, src_height
+            );
             return (Vec::new(), 0, 0);
         }
 
         if safe_w != w || safe_h != h {
-            warn!("Crop region clamped from ({}, {}, {}, {}) to ({}, {}, {}, {}) on {}x{}",
-                x, y, w, h, safe_x, safe_y, safe_w, safe_h, src_width, src_height);
+            warn!(
+                "Crop region clamped from ({}, {}, {}, {}) to ({}, {}, {}, {}) on {}x{}",
+                x, y, w, h, safe_x, safe_y, safe_w, safe_h, src_width, src_height
+            );
         }
 
         let mut cropped = Vec::with_capacity((safe_w * safe_h * 3) as usize);
@@ -499,9 +539,7 @@ impl VideoDecoder {
                 let src_yf = -sin_a * dx + cos_a * dy + cy;
 
                 // Bilinear interpolation (out-of-bounds stays black = 0)
-                if src_xf >= 0.0 && src_xf < w_limit
-                    && src_yf >= 0.0 && src_yf < h_limit
-                {
+                if src_xf >= 0.0 && src_xf < w_limit && src_yf >= 0.0 && src_yf < h_limit {
                     let x0 = src_xf.floor() as usize;
                     let y0 = src_yf.floor() as usize;
                     let x1 = x0 + 1;
@@ -516,9 +554,9 @@ impl VideoDecoder {
                         let v01 = data[y1 * src_stride + x0 * 3 + c] as f64;
                         let v11 = data[y1 * src_stride + x1 * 3 + c] as f64;
                         let v = (1.0 - fx) * (1.0 - fy) * v00
-                              + fx * (1.0 - fy) * v10
-                              + (1.0 - fx) * fy * v01
-                              + fx * fy * v11;
+                            + fx * (1.0 - fy) * v10
+                            + (1.0 - fx) * fy * v01
+                            + fx * fy * v11;
                         result[dst_idx + c] = v.round() as u8;
                     }
                 }

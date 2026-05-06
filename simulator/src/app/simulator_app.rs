@@ -5,16 +5,22 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use egui::{Color32, RichText, Vec2, Rect, Pos2, Stroke, FontId, Align2};
+use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Stroke, Vec2};
 use image::RgbImage;
 use tracing::{info, warn};
 
-use crate::config::{EPConfig, FirmwareConfig, TransitionType, TransitionOptions, OverlayType, ArknightsOverlayOptions, ImageOverlayOptions};
-use crate::app::state::EinkState;
-use crate::render::{TransitionRenderer, OverlayRenderer, ImageLoader, generate_vertical_barcode_gradient, render_text_rotated_90, render_top_right_bar_text_rotated};
 use crate::animation::AnimationController;
+use crate::app::state::EinkState;
+use crate::config::{
+    ArknightsOverlayOptions, EPConfig, FirmwareConfig, ImageOverlayOptions, OverlayType,
+    TransitionOptions, TransitionType,
+};
+use crate::ipc::{start_ipc_server, ControlCommand, IpcMessage, IpcReceiver, IpcSender};
+use crate::render::{
+    generate_vertical_barcode_gradient, render_text_rotated_90, render_top_right_bar_text_rotated,
+    ImageLoader, OverlayRenderer, TransitionRenderer,
+};
 use crate::video::VideoPlayer;
-use crate::ipc::{start_ipc_server, IpcMessage, IpcReceiver, IpcSender, ControlCommand};
 
 use super::state::{PlayState, SimulatorState, TransitionPhase};
 
@@ -133,12 +139,22 @@ impl SimulatorApp {
         app_dir: PathBuf,
         pipe_name: Option<String>,
         use_stdio: bool,
-        cropbox: Option<(u32, u32, u32, u32)>,
-        rotation: i32,
+        loop_cropbox: Option<(u32, u32, u32, u32)>,
+        loop_rotation: i32,
+        loop_start_frame: Option<u32>,
+        loop_end_frame: Option<u32>,
+        intro_cropbox: Option<(u32, u32, u32, u32)>,
+        intro_rotation: i32,
+        intro_start_frame: Option<u32>,
+        intro_end_frame: Option<u32>,
         is_dark_theme: bool,
         config_error: Option<String>,
     ) -> Self {
-        let firmware_config = FirmwareConfig::get_default();
+        let mut firmware_config = FirmwareConfig::get_default();
+        if let Some(ref config) = initial_config {
+            let (overlay_width, overlay_height) = config.screen.dimensions();
+            firmware_config.override_overlay_size(overlay_width, overlay_height);
+        }
         let width = firmware_config.overlay_width();
         let height = firmware_config.overlay_height();
 
@@ -150,8 +166,19 @@ impl SimulatorApp {
             state.appear_time_frames = microseconds_to_frames(appear_us, firmware_config.fps());
         }
 
-        // Create video player with cropbox and rotation
-        let mut video_player = VideoPlayer::new(width, height, cropbox, rotation);
+        // Create video player with intro/loop-specific preview state overrides.
+        let mut video_player = VideoPlayer::new(
+            width,
+            height,
+            loop_cropbox,
+            loop_rotation,
+            loop_start_frame,
+            loop_end_frame,
+            intro_cropbox,
+            intro_rotation,
+            intro_start_frame,
+            intro_end_frame,
+        );
 
         // Load videos from config
         let load_error = if let Some(ref config) = initial_config {
@@ -176,7 +203,8 @@ impl SimulatorApp {
 
         info!(
             "Simulator initialized: {}x{} @ {}fps",
-            width, height,
+            width,
+            height,
             firmware_config.fps()
         );
 
@@ -184,17 +212,21 @@ impl SimulatorApp {
         let auto_start = initial_config.is_some();
 
         // Read transition settings from config
-        let (selected_transition_in, selected_transition_loop) = if let Some(ref config) = initial_config {
-            let trans_in = config.get_transition_in_type();
-            let trans_loop = config.get_transition_loop_type();
-            info!("Transition settings from config: in={:?}, loop={:?}", trans_in, trans_loop);
-            (
-                Self::transition_type_to_index(trans_in),
-                Self::transition_type_to_index(trans_loop),
-            )
-        } else {
-            (0, 0) // Default to Fade
-        };
+        let (selected_transition_in, selected_transition_loop) =
+            if let Some(ref config) = initial_config {
+                let trans_in = config.get_transition_in_type();
+                let trans_loop = config.get_transition_loop_type();
+                info!(
+                    "Transition settings from config: in={:?}, loop={:?}",
+                    trans_in, trans_loop
+                );
+                (
+                    Self::transition_type_to_index(trans_in),
+                    Self::transition_type_to_index(trans_loop),
+                )
+            } else {
+                (0, 0) // Default to Fade
+            };
 
         // Pre-allocate color buffer for frame rendering
         let buffer_size = (width * height) as usize;
@@ -256,7 +288,8 @@ impl SimulatorApp {
     pub fn load_config(&mut self, config: EPConfig, base_dir: PathBuf) {
         // Update appear time
         let appear_us = config.get_appear_time();
-        self.state.appear_time_frames = microseconds_to_frames(appear_us, self.firmware_config.fps());
+        self.state.appear_time_frames =
+            microseconds_to_frames(appear_us, self.firmware_config.fps());
 
         // Load videos
         self.error_message = self.video_player.load_from_config(&config, &base_dir);
@@ -392,14 +425,17 @@ impl SimulatorApp {
             self.is_first_transition = false;
             TransitionType::Swipe
         } else {
-            Self::transition_type_from_index(
-                if has_intro { self.selected_transition_in } else { self.selected_transition_loop }
-            )
+            Self::transition_type_from_index(if has_intro {
+                self.selected_transition_in
+            } else {
+                self.selected_transition_loop
+            })
         };
 
         let total_frames = self.get_transition_frames(has_intro);
 
-        self.state.start_playback(has_intro, transition_type, total_frames);
+        self.state
+            .start_playback(has_intro, transition_type, total_frames);
         self.animation_controller.reset();
 
         // Reset frame accumulators for FPS sync
@@ -413,7 +449,10 @@ impl SimulatorApp {
         self.video_player.seek_loop_to_start();
 
         self.frame_dirty = true;
-        info!("Playback started: has_intro={}, transition={:?}", has_intro, transition_type);
+        info!(
+            "Playback started: has_intro={}, transition={:?}",
+            has_intro, transition_type
+        );
     }
 
     /// Reset playback
@@ -466,7 +505,10 @@ impl SimulatorApp {
                         }
                     }
                 },
-                IpcMessage::SetTransition { transition_in, transition_loop } => {
+                IpcMessage::SetTransition {
+                    transition_in,
+                    transition_loop,
+                } => {
                     self.selected_transition_in = match transition_in.as_str() {
                         "fade" => 0,
                         "move" => 1,
@@ -562,7 +604,7 @@ impl SimulatorApp {
         // Transition complete
         if self.state.transition.is_complete() {
             self.state.play_state = PlayState::Intro;
-            self.state.intro_frame_accumulator = 0;  // Reset for FPS sync
+            self.state.intro_frame_accumulator = 0; // Reset for FPS sync
             self.video_player.seek_intro_to_start();
         }
     }
@@ -604,7 +646,7 @@ impl SimulatorApp {
         if self.state.transition.is_complete() {
             self.state.play_state = PlayState::PreOpinfo;
             self.state.pre_opinfo_counter = 0;
-            self.state.loop_frame_accumulator = 0;  // Reset for FPS sync
+            self.state.loop_frame_accumulator = 0; // Reset for FPS sync
             self.video_player.seek_loop_to_start();
         }
     }
@@ -720,7 +762,10 @@ impl SimulatorApp {
         };
 
         // Apply transition effect if in transition state
-        if matches!(self.state.play_state, PlayState::TransitionIn | PlayState::TransitionLoop) {
+        if matches!(
+            self.state.play_state,
+            PlayState::TransitionIn | PlayState::TransitionLoop
+        ) {
             self.apply_transition_overlay(&mut image);
         }
 
@@ -739,11 +784,8 @@ impl SimulatorApp {
         if let Some(ref mut texture) = self.frame_texture {
             texture.set(image, egui::TextureOptions::NEAREST);
         } else {
-            self.frame_texture = Some(ctx.load_texture(
-                "frame",
-                image,
-                egui::TextureOptions::NEAREST,
-            ));
+            self.frame_texture =
+                Some(ctx.load_texture("frame", image, egui::TextureOptions::NEAREST));
         }
     }
 
@@ -765,9 +807,7 @@ impl SimulatorApp {
             .unwrap_or(Color32::BLACK);
 
         // Check if we have a transition image and we're in Hold phase
-        let has_transition_image = options
-            .map(|o| !o.image.is_empty())
-            .unwrap_or(false);
+        let has_transition_image = options.map(|o| !o.image.is_empty()).unwrap_or(false);
 
         match trans_type {
             TransitionType::Fade => {
@@ -776,43 +816,58 @@ impl SimulatorApp {
 
                 // During Hold phase with transition image, show the image
                 if phase == TransitionPhase::PhaseHold && has_transition_image {
-                    if let Some((ref trans_pixels, trans_width, trans_height)) = self.transition_image_data {
+                    if let Some((ref trans_pixels, trans_width, trans_height)) =
+                        self.transition_image_data
+                    {
                         // Calculate aspect-ratio-preserving scale (contain mode, centered)
                         let screen_aspect = width as f32 / height as f32;
                         let image_aspect = trans_width as f32 / trans_height as f32;
 
-                        let (scaled_w, scaled_h, offset_x, offset_y) = if image_aspect > screen_aspect {
-                            // Image is wider - fit to width
-                            let scaled_w = width as f32;
-                            let scaled_h = width as f32 / image_aspect;
-                            let offset_y = ((height as f32 - scaled_h) / 2.0) as i32;
-                            (scaled_w, scaled_h, 0i32, offset_y)
-                        } else {
-                            // Image is taller - fit to height
-                            let scaled_h = height as f32;
-                            let scaled_w = height as f32 * image_aspect;
-                            let offset_x = ((width as f32 - scaled_w) / 2.0) as i32;
-                            (scaled_w, scaled_h, offset_x, 0i32)
-                        };
+                        let (scaled_w, scaled_h, offset_x, offset_y) =
+                            if image_aspect > screen_aspect {
+                                // Image is wider - fit to width
+                                let scaled_w = width as f32;
+                                let scaled_h = width as f32 / image_aspect;
+                                let offset_y = ((height as f32 - scaled_h) / 2.0) as i32;
+                                (scaled_w, scaled_h, 0i32, offset_y)
+                            } else {
+                                // Image is taller - fit to height
+                                let scaled_h = height as f32;
+                                let scaled_w = height as f32 * image_aspect;
+                                let offset_x = ((width as f32 - scaled_w) / 2.0) as i32;
+                                (scaled_w, scaled_h, offset_x, 0i32)
+                            };
 
                         for (i, pixel) in image.pixels.iter_mut().enumerate() {
                             let x = i % width;
                             let y = i / width;
 
                             // Map screen coordinates to source image coordinates
-                            let src_x = ((x as i32 - offset_x) as f32 * trans_width as f32 / scaled_w) as i32;
-                            let src_y = ((y as i32 - offset_y) as f32 * trans_height as f32 / scaled_h) as i32;
+                            let src_x = ((x as i32 - offset_x) as f32 * trans_width as f32
+                                / scaled_w) as i32;
+                            let src_y = ((y as i32 - offset_y) as f32 * trans_height as f32
+                                / scaled_h) as i32;
 
-                            if src_x >= 0 && src_x < trans_width as i32 && src_y >= 0 && src_y < trans_height as i32 {
+                            if src_x >= 0
+                                && src_x < trans_width as i32
+                                && src_y >= 0
+                                && src_y < trans_height as i32
+                            {
                                 let tex_idx = src_y as usize * trans_width + src_x as usize;
                                 if tex_idx < trans_pixels.len() {
                                     let trans_pixel = trans_pixels[tex_idx];
                                     let blend = alpha as f32 / 255.0;
                                     let inv_blend = 1.0 - blend;
                                     *pixel = Color32::from_rgb(
-                                        ((trans_pixel.r() as f32 * blend) + (pixel.r() as f32 * inv_blend)) as u8,
-                                        ((trans_pixel.g() as f32 * blend) + (pixel.g() as f32 * inv_blend)) as u8,
-                                        ((trans_pixel.b() as f32 * blend) + (pixel.b() as f32 * inv_blend)) as u8,
+                                        ((trans_pixel.r() as f32 * blend)
+                                            + (pixel.r() as f32 * inv_blend))
+                                            as u8,
+                                        ((trans_pixel.g() as f32 * blend)
+                                            + (pixel.g() as f32 * inv_blend))
+                                            as u8,
+                                        ((trans_pixel.b() as f32 * blend)
+                                            + (pixel.b() as f32 * inv_blend))
+                                            as u8,
                                     );
                                 }
                             } else {
@@ -820,9 +875,12 @@ impl SimulatorApp {
                                 let blend = alpha as f32 / 255.0;
                                 let inv_blend = 1.0 - blend;
                                 *pixel = Color32::from_rgb(
-                                    ((bg_color.r() as f32 * blend) + (pixel.r() as f32 * inv_blend)) as u8,
-                                    ((bg_color.g() as f32 * blend) + (pixel.g() as f32 * inv_blend)) as u8,
-                                    ((bg_color.b() as f32 * blend) + (pixel.b() as f32 * inv_blend)) as u8,
+                                    ((bg_color.r() as f32 * blend) + (pixel.r() as f32 * inv_blend))
+                                        as u8,
+                                    ((bg_color.g() as f32 * blend) + (pixel.g() as f32 * inv_blend))
+                                        as u8,
+                                    ((bg_color.b() as f32 * blend) + (pixel.b() as f32 * inv_blend))
+                                        as u8,
                                 );
                             }
                         }
@@ -885,11 +943,8 @@ impl SimulatorApp {
                             } else {
                                 // Default: darken the existing pixels
                                 let p = image.pixels[idx];
-                                image.pixels[idx] = Color32::from_rgb(
-                                    p.r() / 3,
-                                    p.g() / 3,
-                                    p.b() / 3,
-                                );
+                                image.pixels[idx] =
+                                    Color32::from_rgb(p.r() / 3, p.g() / 3, p.b() / 3);
                             }
                         }
                     }
@@ -990,9 +1045,15 @@ impl SimulatorApp {
     fn get_transition_options(&self, is_intro: bool) -> Option<&TransitionOptions> {
         self.epconfig.as_ref().and_then(|config| {
             if is_intro {
-                config.transition_in.as_ref().and_then(|t| t.options.as_ref())
+                config
+                    .transition_in
+                    .as_ref()
+                    .and_then(|t| t.options.as_ref())
             } else {
-                config.transition_loop.as_ref().and_then(|t| t.options.as_ref())
+                config
+                    .transition_loop
+                    .as_ref()
+                    .and_then(|t| t.options.as_ref())
             }
         })
     }
@@ -1014,11 +1075,8 @@ impl SimulatorApp {
                     .map(|p| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
                     .collect();
                 let color_image = egui::ColorImage { size, pixels };
-                self.ak_bar_texture = Some(ctx.load_texture(
-                    "ak_bar",
-                    color_image,
-                    egui::TextureOptions::LINEAR,
-                ));
+                self.ak_bar_texture =
+                    Some(ctx.load_texture("ak_bar", color_image, egui::TextureOptions::LINEAR));
                 info!("Loaded ak_bar.png: {}", ak_bar_path.display());
             } else {
                 warn!("Failed to load ak_bar.png: {}", ak_bar_path.display());
@@ -1043,7 +1101,10 @@ impl SimulatorApp {
                 ));
                 info!("Loaded top_right_arrow.png: {}", arrow_path.display());
             } else {
-                warn!("Failed to load top_right_arrow.png: {}", arrow_path.display());
+                warn!(
+                    "Failed to load top_right_arrow.png: {}",
+                    arrow_path.display()
+                );
             }
         }
 
@@ -1164,7 +1225,8 @@ impl SimulatorApp {
         // Load transition image texture if specified in transition_in or transition_loop
         if self.transition_image_texture.is_none() {
             // Check transition_in first, then transition_loop
-            let image_path = self.get_transition_options(true)
+            let image_path = self
+                .get_transition_options(true)
                 .filter(|opts| !opts.image.is_empty())
                 .map(|opts| opts.image.clone())
                 .or_else(|| {
@@ -1196,7 +1258,10 @@ impl SimulatorApp {
                     ));
                     info!("Loaded transition image: {}", resolved_path.display());
                 } else {
-                    warn!("Failed to load transition image: {}", resolved_path.display());
+                    warn!(
+                        "Failed to load transition image: {}",
+                        resolved_path.display()
+                    );
                 }
             }
         }
@@ -1214,12 +1279,11 @@ impl SimulatorApp {
         if !options.barcode_text.is_empty() && self.barcode_texture.is_none() {
             let barcode_width = self.firmware_config.layout.barcode.width;
             // Use gradient colors for barcode (purple → blue → cyan → yellow)
-            if let Some(barcode_image) = generate_vertical_barcode_gradient(&options.barcode_text, barcode_width, true) {
-                self.barcode_texture = Some(ctx.load_texture(
-                    "barcode",
-                    barcode_image,
-                    egui::TextureOptions::NEAREST,
-                ));
+            if let Some(barcode_image) =
+                generate_vertical_barcode_gradient(&options.barcode_text, barcode_width, true)
+            {
+                self.barcode_texture =
+                    Some(ctx.load_texture("barcode", barcode_image, egui::TextureOptions::NEAREST));
                 info!("Generated gradient barcode texture");
             }
         }
@@ -1235,11 +1299,8 @@ impl SimulatorApp {
                     .map(|p| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
                     .collect();
                 let color_image = egui::ColorImage { size, pixels };
-                self.class_icon_texture = Some(ctx.load_texture(
-                    "class_icon",
-                    color_image,
-                    egui::TextureOptions::LINEAR,
-                ));
+                self.class_icon_texture =
+                    Some(ctx.load_texture("class_icon", color_image, egui::TextureOptions::LINEAR));
                 info!("Loaded class icon: {}", icon_path.display());
             } else {
                 warn!("Failed to load class icon: {}", icon_path.display());
@@ -1257,11 +1318,8 @@ impl SimulatorApp {
                     .map(|p| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
                     .collect();
                 let color_image = egui::ColorImage { size, pixels };
-                self.logo_texture = Some(ctx.load_texture(
-                    "logo",
-                    color_image,
-                    egui::TextureOptions::LINEAR,
-                ));
+                self.logo_texture =
+                    Some(ctx.load_texture("logo", color_image, egui::TextureOptions::LINEAR));
                 info!("Loaded logo: {}", logo_path.display());
             } else {
                 warn!("Failed to load logo: {}", logo_path.display());
@@ -1297,7 +1355,15 @@ impl SimulatorApp {
         // ============================================
         // 1. Render modular static decorations
         // ============================================
-        self.render_modular_decorations(painter, image_rect, scale_x, scale_y, y_offset, entry_alpha, &options);
+        self.render_modular_decorations(
+            painter,
+            image_rect,
+            scale_x,
+            scale_y,
+            y_offset,
+            entry_alpha,
+            &options,
+        );
 
         // ============================================
         // 2. Render dynamic elements
@@ -1307,16 +1373,40 @@ impl SimulatorApp {
         self.render_arrow_indicator(painter, image_rect, scale_x, scale_y, y_offset, theme_color);
 
         // Typewriter texts (operator name, code, staff_text, etc.)
-        self.render_typewriter_texts(painter, image_rect, scale_x, scale_y, y_offset, &options, theme_color);
+        self.render_typewriter_texts(
+            painter,
+            image_rect,
+            scale_x,
+            scale_y,
+            y_offset,
+            &options,
+            theme_color,
+        );
 
         // EINK areas (barcode with gradient, class icon)
         self.render_eink_areas(painter, image_rect, scale_x, scale_y, y_offset);
 
         // Divider lines (white color per C reference)
-        self.render_divider_lines(painter, image_rect, scale_x, scale_y, y_offset, btm_info_x, theme_color);
+        self.render_divider_lines(
+            painter,
+            image_rect,
+            scale_x,
+            scale_y,
+            y_offset,
+            btm_info_x,
+            theme_color,
+        );
 
         // Progress bar (AK bar)
-        self.render_progress_bar(painter, image_rect, scale_x, scale_y, y_offset, btm_info_x, theme_color);
+        self.render_progress_bar(
+            painter,
+            image_rect,
+            scale_x,
+            scale_y,
+            y_offset,
+            btm_info_x,
+            theme_color,
+        );
 
         // Logo image (dynamic fade-in)
         self.render_logo_image(painter, image_rect, scale_x, scale_y, y_offset);
@@ -1354,9 +1444,11 @@ impl SimulatorApp {
                     Color32::WHITE,
                     false,
                 );
-                self.top_left_rhodes_text_texture = Some(
-                    painter.ctx().load_texture("rhodes_text", img, egui::TextureOptions::LINEAR)
-                );
+                self.top_left_rhodes_text_texture = Some(painter.ctx().load_texture(
+                    "rhodes_text",
+                    img,
+                    egui::TextureOptions::LINEAR,
+                ));
                 self.cached_rhodes_text = options.top_left_rhodes.clone();
             }
             if let Some(ref tex) = self.top_left_rhodes_text_texture {
@@ -1368,7 +1460,10 @@ impl SimulatorApp {
                 let display_w = tex_w.min(max_w);
                 let display_h = tex_h.min(max_h);
                 let rect = Rect::from_min_size(
-                    Pos2::new(image_rect.min.x, image_rect.min.y + 5.0 * scale_y + y_offset),
+                    Pos2::new(
+                        image_rect.min.x,
+                        image_rect.min.y + 5.0 * scale_y + y_offset,
+                    ),
                     egui::vec2(display_w * scale_x, display_h * scale_y),
                 );
                 painter.image(tex.id(), rect, uv_full, tint);
@@ -1446,9 +1541,11 @@ impl SimulatorApp {
                         10.0,
                         Color32::WHITE,
                     );
-                    self.top_right_bar_text_texture = Some(
-                        painter.ctx().load_texture("top_right_bar_text", img, egui::TextureOptions::LINEAR)
-                    );
+                    self.top_right_bar_text_texture = Some(painter.ctx().load_texture(
+                        "top_right_bar_text",
+                        img,
+                        egui::TextureOptions::LINEAR,
+                    ));
                     self.cached_top_right_bar_text = options.top_right_bar_text.clone();
                 }
                 if let Some(ref text_tex) = self.top_right_bar_text_texture {
@@ -1497,7 +1594,8 @@ impl SimulatorApp {
         // appear_time: when overlay starts showing (relative to Loop state start)
         // duration: how long to show the overlay (0 means show indefinitely)
         let should_show = if options.duration > 0 {
-            current_time_us >= options.appear_time && current_time_us < options.appear_time + options.duration
+            current_time_us >= options.appear_time
+                && current_time_us < options.appear_time + options.duration
         } else {
             // If duration is 0 or negative, show indefinitely after appear_time
             current_time_us >= options.appear_time
@@ -1553,7 +1651,11 @@ impl SimulatorApp {
 
         // Operator name (large white text)
         if anim.name_chars > 0 {
-            let name: String = options.operator_name.chars().take(anim.name_chars).collect();
+            let name: String = options
+                .operator_name
+                .chars()
+                .take(anim.name_chars)
+                .collect();
             let y = offsets.opname_y as f32 * scale_y + image_rect.min.y + y_offset;
 
             if y >= image_rect.min.y && y <= image_rect.max.y {
@@ -1570,7 +1672,11 @@ impl SimulatorApp {
 
         // Operator code (theme color, smaller text)
         if anim.code_chars > 0 {
-            let code: String = options.operator_code.chars().take(anim.code_chars).collect();
+            let code: String = options
+                .operator_code
+                .chars()
+                .take(anim.code_chars)
+                .collect();
             let y = offsets.opcode_y as f32 * scale_y + image_rect.min.y + y_offset;
 
             if y >= image_rect.min.y && y <= image_rect.max.y {
@@ -1703,11 +1809,17 @@ impl SimulatorApp {
                         let center = classicon_rect.center();
                         let half = classicon_w.min(classicon_h) * 0.3;
                         painter.line_segment(
-                            [Pos2::new(center.x - half, center.y - half), Pos2::new(center.x + half, center.y + half)],
+                            [
+                                Pos2::new(center.x - half, center.y - half),
+                                Pos2::new(center.x + half, center.y + half),
+                            ],
                             Stroke::new(2.0, Color32::WHITE),
                         );
                         painter.line_segment(
-                            [Pos2::new(center.x + half, center.y - half), Pos2::new(center.x - half, center.y + half)],
+                            [
+                                Pos2::new(center.x + half, center.y - half),
+                                Pos2::new(center.x - half, center.y + half),
+                            ],
                             Stroke::new(2.0, Color32::WHITE),
                         );
                     }
@@ -1825,20 +1937,15 @@ impl SimulatorApp {
                 egui::vec2(displayed_width, displayed_height),
             );
 
-            let uv = Rect::from_min_max(
-                Pos2::new(0.0, 0.0),
-                Pos2::new(reveal_ratio, 1.0),
-            );
+            let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(reveal_ratio, 1.0));
 
             painter.image(ak_bar_texture.id(), bar_rect, uv, Color32::WHITE);
         } else {
             // Fallback: solid color rectangle
             let bar_height = 3.0 * scale_y;
             if y + bar_height <= image_rect.max.y {
-                let bar_rect = Rect::from_min_size(
-                    Pos2::new(btm_info_x, y),
-                    egui::vec2(width, bar_height),
-                );
+                let bar_rect =
+                    Rect::from_min_size(Pos2::new(btm_info_x, y), egui::vec2(width, bar_height));
                 painter.rect_filled(bar_rect, 0.0, theme_color);
             }
         }
@@ -1868,8 +1975,8 @@ impl SimulatorApp {
             // Arrow image dimensions: 24x100, positioned at Y=100 per opinfo.c reference
             let arrow_width = 24.0 * scale_x;
             let arrow_height = 100.0 * scale_y;
-            let arrow_x = image_rect.max.x - arrow_width;  // Right-aligned
-            let arrow_y = image_rect.min.y + 100.0 * scale_y + y_offset;  // Y=100
+            let arrow_x = image_rect.max.x - arrow_width; // Right-aligned
+            let arrow_y = image_rect.min.y + 100.0 * scale_y + y_offset; // Y=100
 
             // UV scrolling to implement upward loop animation
             // anim.arrow_y cycles 0-99, use it as scroll offset
@@ -1937,17 +2044,13 @@ impl SimulatorApp {
         let black = Color32::from_rgba_unmultiplied(0, 0, 0, alpha);
 
         // Horizontal bar: 95x25 pixels (original template precise value)
-        let h_rect = Rect::from_min_size(
-            image_rect.min,
-            egui::vec2(95.0 * scale_x, 25.0 * scale_y),
-        );
+        let h_rect =
+            Rect::from_min_size(image_rect.min, egui::vec2(95.0 * scale_x, 25.0 * scale_y));
         painter.rect_filled(h_rect, 0.0, black);
 
         // Vertical bar: 25x105 pixels (original template precise value)
-        let v_rect = Rect::from_min_size(
-            image_rect.min,
-            egui::vec2(25.0 * scale_x, 105.0 * scale_y),
-        );
+        let v_rect =
+            Rect::from_min_size(image_rect.min, egui::vec2(25.0 * scale_x, 105.0 * scale_y));
         painter.rect_filled(v_rect, 0.0, black);
 
         // White triangle cutout (at inner corner of L-shape)
@@ -1988,7 +2091,7 @@ impl SimulatorApp {
 
         // Define stripes (Y offset, height, width) - stripes get shorter from top to bottom
         let stripes: [(f32, f32, f32); 12] = [
-            (0.0, 6.0, 76.0),   // Top stripe - longest
+            (0.0, 6.0, 76.0), // Top stripe - longest
             (8.0, 8.0, 72.0),
             (18.0, 10.0, 68.0),
             (30.0, 8.0, 64.0),
@@ -2083,7 +2186,7 @@ impl SimulatorApp {
                         Align2::CENTER_TOP,
                         ch.to_string(),
                         FontId::proportional(14.0 * scale_y), // Larger for bold effect
-                        yellow, // RHODES is yellow
+                        yellow,                               // RHODES is yellow
                     );
                 }
             }
@@ -2229,11 +2332,11 @@ impl SimulatorApp {
 
             // Draw polygon with diagonal cut at top-left corner
             let points = vec![
-                Pos2::new(bg_x + cut_size, bg_y),           // Top-left (after cut)
-                Pos2::new(image_rect.max.x, bg_y),          // Top-right
+                Pos2::new(bg_x + cut_size, bg_y),  // Top-left (after cut)
+                Pos2::new(image_rect.max.x, bg_y), // Top-right
                 Pos2::new(image_rect.max.x, bg_y + bg_height), // Bottom-right
-                Pos2::new(bg_x, bg_y + bg_height),          // Bottom-left
-                Pos2::new(bg_x, bg_y + cut_size),           // Cut point on left edge
+                Pos2::new(bg_x, bg_y + bg_height), // Bottom-left
+                Pos2::new(bg_x, bg_y + cut_size),  // Cut point on left edge
             ];
             painter.add(egui::Shape::convex_polygon(points, black, Stroke::NONE));
 
@@ -2404,30 +2507,44 @@ impl eframe::App for SimulatorApp {
                 } else {
                     "Video: None"
                 };
-                ui.label(RichText::new(video_status).color(
-                    if self.video_player.has_loop() { Color32::GREEN } else { Color32::GRAY }
-                ).small());
+                ui.label(
+                    RichText::new(video_status)
+                        .color(if self.video_player.has_loop() {
+                            Color32::GREEN
+                        } else {
+                            Color32::GRAY
+                        })
+                        .small(),
+                );
             });
 
             ui.separator();
 
             // Status display
-            ui.label(RichText::new(format!(
-                "State: {} | Frame: {} | Animation Frame: {}",
-                self.state.play_state.display_name(),
-                self.state.frame_counter,
-                self.state.animation.frame_counter
-            )).color(dim_text_color).small());
+            ui.label(
+                RichText::new(format!(
+                    "State: {} | Frame: {} | Animation Frame: {}",
+                    self.state.play_state.display_name(),
+                    self.state.frame_counter,
+                    self.state.animation.frame_counter
+                ))
+                .color(dim_text_color)
+                .small(),
+            );
 
             // Animation state details (debug)
             if self.state.play_state == PlayState::Loop {
-                ui.label(RichText::new(format!(
-                    "Name: {} | Code: {} | Color: {} | Entry: {:.1}%",
-                    self.state.animation.name_chars,
-                    self.state.animation.code_chars,
-                    self.state.animation.color_fade_radius,
-                    self.state.animation.entry_progress * 100.0
-                )).color(dim_text_color).small());
+                ui.label(
+                    RichText::new(format!(
+                        "Name: {} | Code: {} | Color: {} | Entry: {:.1}%",
+                        self.state.animation.name_chars,
+                        self.state.animation.code_chars,
+                        self.state.animation.color_fade_radius,
+                        self.state.animation.entry_progress * 100.0
+                    ))
+                    .color(dim_text_color)
+                    .small(),
+                );
             }
 
             ui.add_space(4.0);
@@ -2437,12 +2554,15 @@ impl eframe::App for SimulatorApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             // Title
             let video_fps = self.video_player.loop_fps();
-            ui.heading(RichText::new(format!(
-                "Pass Simulator ({}x{} @ {:.1}fps)",
-                self.firmware_config.overlay_width(),
-                self.firmware_config.overlay_height(),
-                video_fps
-            )).color(text_color));
+            ui.heading(
+                RichText::new(format!(
+                    "Pass Simulator ({}x{} @ {:.1}fps)",
+                    self.firmware_config.overlay_width(),
+                    self.firmware_config.overlay_height(),
+                    video_fps
+                ))
+                .color(text_color),
+            );
 
             ui.separator();
 
@@ -2467,10 +2587,11 @@ impl eframe::App for SimulatorApp {
             // Display area
             let image_response = ui.vertical_centered(|ui| {
                 if let Some(ref texture) = self.frame_texture {
-                    let response = ui.image(egui::ImageSource::Texture(egui::load::SizedTexture::new(
-                        texture.id(),
-                        Vec2::new(img_width, img_height),
-                    )));
+                    let response =
+                        ui.image(egui::ImageSource::Texture(egui::load::SizedTexture::new(
+                            texture.id(),
+                            Vec2::new(img_width, img_height),
+                        )));
                     Some(response.rect)
                 } else {
                     None
@@ -2479,7 +2600,8 @@ impl eframe::App for SimulatorApp {
 
             // Render overlay UI on top of the image when in Loop state
             if self.state.play_state == PlayState::Loop {
-                let overlay_type = self.epconfig
+                let overlay_type = self
+                    .epconfig
                     .as_ref()
                     .and_then(|c| c.overlay.as_ref())
                     .map(|o| o.overlay_type)

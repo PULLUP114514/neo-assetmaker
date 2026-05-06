@@ -3,9 +3,9 @@
 //! Implements FADE, MOVE, and SWIPE transition effects.
 //! Corresponds to Python's core/transition_renderer.py
 
-use crate::config::{FirmwareConfig, TransitionType};
+use super::bezier::{ease_in, ease_in_out, ease_out, precompute_swipe_bezier};
 use crate::app::state::TransitionPhase;
-use super::bezier::{ease_in, ease_out, ease_in_out, precompute_swipe_bezier};
+use crate::config::{FirmwareConfig, TransitionType};
 
 /// Transition renderer
 pub struct TransitionRenderer {

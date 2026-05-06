@@ -12,7 +12,6 @@ Arknights Pass Material Toolbox — 用于制作明日方舟电子通行证 2.1 
 - 后台线程视频预览，长视频加载不阻塞 UI
 - 拖放文件导入，支持将视频/图片直接拖入预览区域
 - 时间轴控制与帧精准定位
-- 多分辨率支持：360x640、480x854、720x1080
 - 配置验证（UUID、颜色值、文件路径等）
 - 截取帧编辑，从视频中截取帧并保存为图标
 - 过渡效果预览（fade、move、swipe 等）
@@ -27,8 +26,9 @@ Arknights Pass Material Toolbox — 用于制作明日方舟电子通行证 2.1 
 
 ### 通行证模拟预览
 
-- Rust 编写的 egui 模拟器，360x640 设备模拟
+- Rust 编写的 egui 模拟器，屏幕尺寸跟随项目 `screen` 配置
 - 完整播放流程：入场过渡 → 入场视频 → 循环过渡 → 循环视频 + 叠加层
+- 模拟预览会分别继承入场视频和循环视频各自的裁切框、旋转角度与时间轴 in/out，行为与导出保持一致
 - Python ↔ Rust 通过 Windows 命名管道 IPC 通信
 
 ### 素材论坛
@@ -39,10 +39,12 @@ Arknights Pass Material Toolbox — 用于制作明日方舟电子通行证 2.1 
 - 本地素材库管理
 - USB/MTP 设备管理
 
-### SSH 远程上传
+### SSH 远程管理
 
 - 侧边栏远程管理入口（WiFi 图标）
 - SSH 连接配置（地址、端口、用户名、密码、远程路径）
+- 远程素材列表刷新，以及下载 / 删除 / 编辑入口
+- 远程文件管理器与 SSH 终端入口
 - 一键上传文件到通行证设备，实时进度显示
 - 上传完毕后可选自动重启通行证程序
 
@@ -61,6 +63,12 @@ Arknights Pass Material Toolbox — 用于制作明日方舟电子通行证 2.1 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/)（包管理器）
 - Rust 工具链（仅编译模拟器时需要）
+- 若需本地编译 `simulator/`，还需要可用的 FFmpeg 开发依赖发现环境（`pkg-config` 或 `vcpkg`）
+
+## 文档
+
+- [用户手册](docs/USER_MANUAL.md)
+- [更新日志](docs/CHANGELOG.md)
 
 ## 安装与运行
 
@@ -193,6 +201,10 @@ neo-assetmaker/
 ├── build.bat                        # 批处理构建包装器
 ├── installer.iss                    # Inno Setup 安装程序配置
 │
+├── docs/                            # 项目文档
+│   ├── CHANGELOG.md                 # 版本更新日志（Release 触发源）
+│   └── USER_MANUAL.md               # 面向使用者的操作手册
+│
 ├── config/                          # 配置模块
 │   ├── constants.py                 # 常量定义（分辨率、格式、默认值）
 │   ├── epconfig.py                  # EPConfig 统一数据模型
@@ -256,8 +268,9 @@ neo-assetmaker/
 │   └── Cargo.toml                   # Rust 项目配置
 │
 └── .github/workflows/               # CI/CD
-    ├── build.yml                    # 自动构建（Rust + Python + Inno Setup）
-    └── release.yml                  # 自动发布（CHANGELOG 版本变更触发）
+    ├── build.yml                    # CI 入口工作流
+    ├── build-app.yml                # 可复用的 Windows 构建流程
+    └── release.yml                  # 自动发布（docs/CHANGELOG.md 版本变更触发）
 ```
 
 ## 构建与打包
@@ -283,6 +296,8 @@ build.bat
 
 ### 编译 Rust 模拟器
 
+先确认本机可以解析 FFmpeg 开发依赖（`pkg-config` 或 `vcpkg` 至少其一可用）：
+
 ```bash
 cd simulator && cargo build --release
 ```
@@ -291,8 +306,8 @@ cd simulator && cargo build --release
 
 GitHub Actions 工作流位于 `.github/workflows/`：
 
-- **build.yml** — push/PR 时自动构建：Rust 模拟器编译 → Python 应用打包 → Inno Setup 安装程序
-- **release.yml** — `CHANGELOG.md` 版本号变更时自动创建 GitHub Release
+- **build.yml** — push/PR 时触发 CI，并调用 `build-app.yml` 完成 Rust 编译、Python 打包和 Inno Setup 安装包构建
+- **release.yml** — `docs/CHANGELOG.md` 顶部版本号变更时自动创建 GitHub Release
 
 构建环境：Windows Latest, Python 3.11, uv, Rust stable, FFmpeg, Inno Setup
 

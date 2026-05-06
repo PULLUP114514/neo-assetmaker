@@ -2,10 +2,10 @@
 //!
 //! Implements Named Pipe server for Windows and stdin/stdout fallback.
 
+use anyhow::Result;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc::{Receiver, Sender};
-use anyhow::Result;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 #[cfg(windows)]
 use interprocess::TryClone;
@@ -99,17 +99,14 @@ impl IpcServer {
     #[cfg(windows)]
     pub fn run_named_pipe(&mut self, pipe_name: &str) -> Result<()> {
         use interprocess::local_socket::{
-            GenericNamespaced, ListenerOptions, ToNsName,
-            traits::Listener,
+            traits::Listener, GenericNamespaced, ListenerOptions, ToNsName,
         };
 
         info!("Starting Named Pipe IPC server: {}", pipe_name);
 
         // Create the named pipe listener
         let name = pipe_name.to_ns_name::<GenericNamespaced>()?;
-        let listener = ListenerOptions::new()
-            .name(name)
-            .create_sync()?;
+        let listener = ListenerOptions::new().name(name).create_sync()?;
 
         info!("Named pipe server listening");
 

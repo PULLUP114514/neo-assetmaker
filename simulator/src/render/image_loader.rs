@@ -70,11 +70,7 @@ impl ImageLoader {
         let color_image = ColorImage { size, pixels };
 
         // Create texture
-        let texture = ctx.load_texture(
-            path,
-            color_image,
-            TextureOptions::LINEAR,
-        );
+        let texture = ctx.load_texture(path, color_image, TextureOptions::LINEAR);
 
         let id = texture.id();
         self.textures.insert(path.to_string(), texture);
@@ -94,7 +90,11 @@ impl ImageLoader {
     }
 
     /// Load an image and return its dimensions along with the texture ID
-    pub fn load_image_with_size(&mut self, ctx: &Context, path: &str) -> Option<(TextureId, [usize; 2])> {
+    pub fn load_image_with_size(
+        &mut self,
+        ctx: &Context,
+        path: &str,
+    ) -> Option<(TextureId, [usize; 2])> {
         // Check cache first
         if let Some(handle) = self.textures.get(path) {
             let size = handle.size();
@@ -124,11 +124,7 @@ impl ImageLoader {
         let color_image = ColorImage { size, pixels };
 
         // Create texture
-        let texture = ctx.load_texture(
-            path,
-            color_image,
-            TextureOptions::LINEAR,
-        );
+        let texture = ctx.load_texture(path, color_image, TextureOptions::LINEAR);
 
         let id = texture.id();
         self.textures.insert(path.to_string(), texture);
@@ -214,7 +210,11 @@ pub fn generate_barcode(text: &str, height: u32) -> Option<ColorImage> {
     let mut pixels = vec![Color32::TRANSPARENT; width * height as usize];
 
     for (x, &bar) in encoded.iter().enumerate() {
-        let color = if bar == 1 { Color32::WHITE } else { Color32::TRANSPARENT };
+        let color = if bar == 1 {
+            Color32::WHITE
+        } else {
+            Color32::TRANSPARENT
+        };
         for y in 0..height as usize {
             pixels[y * width + x] = color;
         }
@@ -263,7 +263,11 @@ pub fn generate_vertical_barcode(text: &str, width: u32) -> Option<ColorImage> {
 
 /// Generate a vertical barcode with optional gradient colors
 /// When use_gradient is true, bars use a purple→blue→cyan→yellow gradient
-pub fn generate_vertical_barcode_gradient(text: &str, width: u32, use_gradient: bool) -> Option<ColorImage> {
+pub fn generate_vertical_barcode_gradient(
+    text: &str,
+    width: u32,
+    use_gradient: bool,
+) -> Option<ColorImage> {
     use barcoders::sym::code128::Code128;
 
     // Preprocess text for Code128 compatibility
@@ -278,7 +282,10 @@ pub fn generate_vertical_barcode_gradient(text: &str, width: u32, use_gradient: 
     let barcode = match Code128::new(&processed_text) {
         Ok(b) => b,
         Err(e) => {
-            warn!("Failed to create barcode for '{}' (processed: '{}'): {:?}", text, processed_text, e);
+            warn!(
+                "Failed to create barcode for '{}' (processed: '{}'): {:?}",
+                text, processed_text, e
+            );
             return None;
         }
     };

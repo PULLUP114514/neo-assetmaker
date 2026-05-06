@@ -3,8 +3,8 @@
 //! Renders the Arknights-style overlay UI.
 //! Corresponds to Python's core/overlay_animator.py
 
-use crate::config::FirmwareConfig;
 use crate::app::state::AnimationState;
+use crate::config::FirmwareConfig;
 
 /// Overlay renderer
 pub struct OverlayRenderer {
@@ -59,7 +59,13 @@ impl OverlayRenderer {
     }
 
     /// Calculate bar/line width using bezier easing
-    pub fn calculate_bar_width(&self, frame: u32, start_frame: u32, frame_count: u32, target_width: u32) -> u32 {
+    pub fn calculate_bar_width(
+        &self,
+        frame: u32,
+        start_frame: u32,
+        frame_count: u32,
+        target_width: u32,
+    ) -> u32 {
         if frame < start_frame {
             return 0;
         }
@@ -75,7 +81,13 @@ impl OverlayRenderer {
     }
 
     /// Calculate typewriter visible characters
-    pub fn calculate_typewriter_chars(&self, frame: u32, text_len: usize, start_frame: u32, frame_per_char: u32) -> usize {
+    pub fn calculate_typewriter_chars(
+        &self,
+        frame: u32,
+        text_len: usize,
+        start_frame: u32,
+        frame_per_char: u32,
+    ) -> usize {
         if frame < start_frame {
             return 0;
         }
@@ -86,29 +98,40 @@ impl OverlayRenderer {
     }
 
     /// Update animation state for current frame
-    pub fn update_animation_state(&self, state: &mut AnimationState, name_len: usize, code_len: usize, staff_len: usize, aux_len: usize) {
+    pub fn update_animation_state(
+        &self,
+        state: &mut AnimationState,
+        name_len: usize,
+        code_len: usize,
+        staff_len: usize,
+        aux_len: usize,
+    ) {
         let frame = state.frame_counter;
 
         // Typewriter effects
         state.name_chars = self.calculate_typewriter_chars(
-            frame, name_len,
+            frame,
+            name_len,
             self.config.name_start_frame(),
-            self.config.name_frame_per_char()
+            self.config.name_frame_per_char(),
         );
         state.code_chars = self.calculate_typewriter_chars(
-            frame, code_len,
+            frame,
+            code_len,
             self.config.code_start_frame(),
-            self.config.code_frame_per_char()
+            self.config.code_frame_per_char(),
         );
         state.staff_chars = self.calculate_typewriter_chars(
-            frame, staff_len,
+            frame,
+            staff_len,
             self.config.staff_start_frame(),
-            self.config.staff_frame_per_char()
+            self.config.staff_frame_per_char(),
         );
         state.aux_chars = self.calculate_typewriter_chars(
-            frame, aux_len,
+            frame,
+            aux_len,
             self.config.aux_start_frame(),
-            self.config.aux_frame_per_char()
+            self.config.aux_frame_per_char(),
         );
 
         // Color fade
@@ -123,19 +146,19 @@ impl OverlayRenderer {
             frame,
             self.config.animation.bars_lines.ak_bar.start_frame,
             self.config.animation.bars_lines.ak_bar.frame_count,
-            line_width
+            line_width,
         );
         state.upper_line_width = self.calculate_bar_width(
             frame,
             self.config.animation.bars_lines.upper_line.start_frame,
             self.config.animation.bars_lines.upper_line.frame_count,
-            line_width
+            line_width,
         );
         state.lower_line_width = self.calculate_bar_width(
             frame,
             self.config.animation.bars_lines.lower_line.start_frame,
             self.config.animation.bars_lines.lower_line.frame_count,
-            line_width
+            line_width,
         );
 
         // Arrow animation - decrement to scroll upward (per C reference opinfo.c:553)

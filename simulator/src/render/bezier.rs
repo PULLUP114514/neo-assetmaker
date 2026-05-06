@@ -31,9 +31,8 @@ pub fn cubic_bezier(t: f32, p1x: f32, p1y: f32, p2x: f32, p2y: f32) -> f32 {
         let x = 3.0 * one_minus_s2 * s * p1x + 3.0 * one_minus_s * s2 * p2x + s3;
 
         // Calculate dx/ds
-        let dx = 3.0 * one_minus_s2 * p1x
-            + 6.0 * one_minus_s * s * (p2x - p1x)
-            + 3.0 * s2 * (1.0 - p2x);
+        let dx =
+            3.0 * one_minus_s2 * p1x + 6.0 * one_minus_s * s * (p2x - p1x) + 3.0 * s2 * (1.0 - p2x);
 
         if dx.abs() < 1e-10 {
             break;
