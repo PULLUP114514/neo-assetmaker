@@ -330,6 +330,7 @@ class SettingsPage(QWidget):
         )
         self._creds_worker.completed.connect(self._on_credentials_loaded)
         self._creds_worker.error.connect(self._on_credentials_error)
+        self._services.track_qthread(self._creds_worker)
         self._creds_worker.start()
 
     @Slot(list)
@@ -377,6 +378,7 @@ class SettingsPage(QWidget):
                 duration=5000,
             )
         )
+        self._services.track_qthread(self._register_begin_worker)
         self._register_begin_worker.start()
 
     @Slot(object)
@@ -403,6 +405,7 @@ class SettingsPage(QWidget):
         )
         worker.error.connect(lambda msg: self._on_register_error(msg, touch_dialog))
 
+        self._services.track_qthread(worker)
         worker.start()
 
     def _show_pin_dialog(self, worker: Any, retries: int) -> None:
@@ -441,6 +444,7 @@ class SettingsPage(QWidget):
                 duration=5000,
             )
         )
+        self._services.track_qthread(self._register_complete_worker)
         self._register_complete_worker.start()
 
     @Slot(object)
@@ -484,6 +488,7 @@ class SettingsPage(QWidget):
                 duration=5000,
             )
         )
+        self._services.track_qthread(self._delete_cred_worker)
         self._delete_cred_worker.start()
 
     @Slot(object)
