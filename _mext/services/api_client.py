@@ -7,9 +7,11 @@ and transparent token refresh on 401 responses.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any, Generator, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -19,6 +21,16 @@ from _mext.core.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _default_port(scheme: str) -> Optional[int]:
+    """Return default port for HTTP schemes."""
+    normalized = scheme.lower()
+    if normalized == "https":
+        return 443
+    if normalized == "http":
+        return 80
+    return None
 
 
 class ApiError(Exception):
@@ -80,12 +92,30 @@ class ApiClient:
         """
         self._refresh_callback = callback
 
-    def _build_headers(self, extra_headers: Optional[dict[str, str]] = None) -> dict[str, str]:
+    def should_send_auth_to(self, url: str) -> bool:
+        """Return True when a URL is relative or matches the configured API origin."""
+        parsed = urlparse(url)
+        if not parsed.scheme and not parsed.netloc:
+            return True
+
+        base = urlparse(str(self._client.base_url))
+        return (
+            parsed.scheme.lower() == base.scheme.lower()
+            and parsed.hostname == base.hostname
+            and (parsed.port or _default_port(parsed.scheme)) == (base.port or _default_port(base.scheme))
+        )
+
+    def _build_headers(
+        self,
+        extra_headers: Optional[dict[str, str]] = None,
+        *,
+        include_auth: bool = True,
+    ) -> dict[str, str]:
         """Build request headers, injecting Authorization if token exists."""
         headers: dict[str, str] = {}
         with self._token_lock:
             token = self._access_token
-        if token:
+        if token and include_auth:
             headers["Authorization"] = f"Bearer {token}"
         if extra_headers:
             headers.update(extra_headers)
@@ -230,9 +260,12 @@ class ApiClient:
             (bytes_downloaded_so_far, total_expected_size). total may be 0
             if the server does not provide Content-Length.
         """
-        headers = self._build_headers()
+        headers = self._build_headers(include_auth=self.should_send_auth_to(url))
         if resume_from > 0:
             headers["Range"] = f"bytes={resume_from}-"
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        temp_dest = dest.with_name(f".{dest.name}.tmp")
 
         with self._client.stream(
             "GET",
@@ -255,11 +288,13 @@ class ApiClient:
             downloaded = resume_from
             mode = "ab" if resume_from > 0 else "wb"
 
-            with open(dest, mode) as fh:
+            with open(temp_dest, mode) as fh:
                 for chunk in response.iter_bytes(chunk_size=chunk_size):
                     fh.write(chunk)
                     downloaded += len(chunk)
                     yield downloaded, total_size
+
+        os.replace(temp_dest, dest)
 
     # -- Lifecycle --
 

@@ -3,6 +3,7 @@
 venv/
 ENV/
 env/
+.uv-cache/
 
 # Python cache
 __pycache__/
@@ -56,5 +57,4 @@ cache/a2.6.0/boot_ubi.img
 cache/a2.6.0/rootfs_ubi.img
 bootenv.txt
 tools/innosetup/
-
 AGENTS.md

@@ -20,6 +20,9 @@ on:
         default: ""
         description: '非空时在构建前同步版本号到各配置文件'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest
@@ -100,7 +103,9 @@ jobs:
           $env:FFMPEG_DIR = "${{ github.workspace }}\ffmpeg-sdk"
           Write-Host "FFMPEG_DIR: $env:FFMPEG_DIR"
           cd simulator
-          cargo build --release
+          cargo fmt --check
+          cargo test
+          cargo build --release --locked
           if (Test-Path "target\release\arknights_pass_simulator.exe") {
             Write-Host "Simulator built successfully"
           } else {
@@ -128,7 +133,13 @@ jobs:
           else
             uv sync --locked
           fi
-          uv run --no-sync python -c "import OpenGL, av, cv2, PyQt6, numpy; print('All packages OK')"
+          uv run --no-sync python -c "import OpenGL, av, cv2, PyQt6, numpy, requests; import core.rndis_device_service, core.http_remote_service, gui.workers.rndis_http_workers; print('All packages OK')"
+
+      - name: Run Python tests
+        shell: bash
+        run: |
+          uv run --no-sync python -m compileall main.py config core gui utils _mext build.py tests
+          uv run --no-sync python -m unittest discover -s tests -p "test_*.py"
 
       - name: Cache FFmpeg
         id: cache-ffmpeg

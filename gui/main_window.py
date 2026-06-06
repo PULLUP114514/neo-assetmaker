@@ -612,14 +612,14 @@ class MainWindow(QMainWindow):
             self._on_capture_frame)
         self.advanced_config_panel.transition_image_changed.connect(
             self._on_transition_image_changed)
-        self.advanced_config_panel.ssh_upload_requested.connect(self._on_ssh_upload)
+        self.advanced_config_panel.remote_upload_requested.connect(self._on_remote_upload)
         
         self.basic_config_panel.config_changed.connect(self._on_config_changed)
         self.basic_config_panel.video_file_selected.connect(
             self._on_video_file_selected)
         self.basic_config_panel.validate_requested.connect(self._on_validate)
         self.basic_config_panel.export_requested.connect(self._on_export)
-        self.basic_config_panel.ssh_upload_requested.connect(self._on_ssh_upload)
+        self.basic_config_panel.remote_upload_requested.connect(self._on_remote_upload)
         self.btn_save_icon.clicked.connect(self._on_save_captured_icon)
 
         self.transition_preview.transition_crop_changed.connect(
@@ -673,70 +673,63 @@ class MainWindow(QMainWindow):
 
         self.update()
 
-    def _on_ssh_upload(self):
-        """SSH 上传"""
+    def _on_remote_upload(self):
+        """Export and upload through EPass RNDIS HTTP."""
         try:
             result = self._on_export()
             if not result:
                 return
             export_dialog, dir_path = result
 
-            if not getattr(export_dialog, '_is_completed', False) or \
-                    export_dialog.label_status.text() != "导出完成!":
-                print("导出失败，取消SSH上传")
+            if not getattr(export_dialog, 'was_successful', False):
+                logger.warning("Export failed, cancelling RNDIS HTTP upload")
                 return
 
             if not os.path.exists(dir_path):
-                print("导出目录不存在，取消SSH上传")
+                logger.warning("Export directory does not exist: %s", dir_path)
                 return
 
             settings = self._read_user_settings()
-            host = settings.get('ssh_ip_address', "192.168.137.2")
-            port = settings.get('ssh_port', 22)
-            user = settings.get('ssh_user', "root")
-            password = settings.get('ssh_password', "toor")
-            remote_path = settings.get('ssh_default_upload_path', "/assets/")
-            enableRestart = settings.get('ssh_auto_restart_program', True)
-
-            from core.ssh_upload_service import SshUploadWorker
-            from gui.dialogs.ssh_upload_progress_dialog import SshUploadProgressDialog
-
-            self._ssh_upload_worker = SshUploadWorker(self)
-            self._ssh_upload_dialog = SshUploadProgressDialog(self)
-
-            self._ssh_upload_worker.progress_updated.connect(
-                self._ssh_upload_dialog.update_progress
-            )
-            self._ssh_upload_worker.upload_completed.connect(
-                lambda msg: self._on_ssh_upload_completed(True, msg)
-            )
-            self._ssh_upload_worker.upload_failed.connect(
-                lambda msg: self._on_ssh_upload_completed(False, msg)
-            )
-            self._ssh_upload_dialog.cancel_requested.connect(
-                self._ssh_upload_worker.cancel
+            enable_restart = settings.get(
+                'remote_auto_restart_program',
+                settings.get('ssh_auto_restart_program', True),
             )
 
-            self._ssh_upload_worker.setup(
-                host=host,
-                port=port,
-                user=user,
-                password=password,
-                local_path=dir_path,
-                remote_path=remote_path,
-                enable_restart=enableRestart,
+            from core.rndis_device_service import DEFAULT_BASE_URL
+            from gui.dialogs.remote_upload_progress_dialog import (
+                RemoteUploadProgressDialog,
             )
-            self._ssh_upload_worker.start()
+            from gui.workers.rndis_http_workers import HttpUploadAssetWorker
 
-            self._ssh_upload_dialog.exec()
+            self._remote_upload_worker = HttpUploadAssetWorker(
+                DEFAULT_BASE_URL, dir_path, enable_restart, parent=self
+            )
+            self._remote_upload_dialog = RemoteUploadProgressDialog(self)
+
+            self._remote_upload_worker.progress_updated.connect(
+                self._remote_upload_dialog.update_progress
+            )
+            self._remote_upload_worker.upload_completed.connect(
+                lambda msg: self._on_remote_upload_completed(True, msg)
+            )
+            self._remote_upload_worker.upload_failed.connect(
+                lambda msg: self._on_remote_upload_completed(False, msg)
+            )
+            self._remote_upload_dialog.cancel_requested.connect(
+                self._remote_upload_worker.cancel
+            )
+
+            self._remote_upload_worker.start()
+
+            self._remote_upload_dialog.exec()
 
             # 如果用户取消了对话框，让后台线程尽快结束
-            if self._ssh_upload_worker.isRunning():
-                self._ssh_upload_worker.cancel()
-                self._ssh_upload_worker.wait(2000)
+            if self._remote_upload_worker.isRunning():
+                self._remote_upload_worker.cancel()
+                self._remote_upload_worker.wait(2000)
 
         except Exception as e:
-            print("发生错误:", e)
+            logger.exception("RNDIS HTTP upload failed")
             return
         return
 
@@ -1377,6 +1370,11 @@ class MainWindow(QMainWindow):
     def _on_simulator(self):
         """打开模拟器预览"""
         import subprocess
+        from core.simulator_launcher import (
+            MediaLaunchState,
+            SimulatorLauncher,
+            SimulatorLaunchRequest,
+        )
 
         if not self._config:
             QMessageBox.information(self, "提示", "请先创建或打开项目")
@@ -1390,19 +1388,14 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # 安装模式路径（扁平化）
-        simulator_path = os.path.join(
+        simulator_launcher = SimulatorLauncher(self._app_dir)
+        simulator_path_obj = simulator_launcher.find_simulator()
+        simulator_path = str(simulator_path_obj) if simulator_path_obj else os.path.join(
             self._app_dir,
-            "simulator", "arknights_pass_simulator.exe"
+            "simulator", "target", "release", "arknights_pass_simulator.exe",
         )
-        # 开发模式 fallback：Cargo 默认输出路径
-        if not os.path.exists(simulator_path):
-            simulator_path = os.path.join(
-                self._app_dir,
-                "simulator", "target", "release", "arknights_pass_simulator.exe"
-            )
 
-        if not os.path.exists(simulator_path):
+        if simulator_path_obj is None:
             QMessageBox.information(
                 self, "提示",
                 f"模拟器未找到\n\n"
@@ -1587,9 +1580,6 @@ class MainWindow(QMainWindow):
 
             cropbox = loop_state["cropbox"]
             rotation = loop_state["rotation"]
-            loop_end_frame = max(
-                loop_state["start_frame"], loop_state["end_frame"] - 1
-            )
 
             logger.info(
                 "启动模拟器: "
@@ -1598,55 +1588,41 @@ class MainWindow(QMainWindow):
                 f"gui_video={self.video_preview.video_path}"
             )
 
-            popen_kwargs = {'stderr': subprocess.PIPE}
-            if sys.platform == 'win32':
-                popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-
-            # 设置工作目录为应用根目录，确保模拟器能找到 FFmpeg DLL
-            # Windows DLL 搜索顺序：exe 所在目录 → system32 → PATH
-            # 模拟器 exe 在 simulator/ 子目录（安装模式）或 simulator/target/release/（开发模式），
-            # 均无法直接找到根目录的 FFmpeg DLL，需要通过 cwd 和 PATH 解决
-            popen_kwargs['cwd'] = self._app_dir
-
-            # 双保险：将 app_dir 加入 PATH 环境变量
-            env = os.environ.copy()
-            env['PATH'] = self._app_dir + os.pathsep + env.get('PATH', '')
-            # 开发模式：FFmpeg DLL 可能在 ffmpeg-sdk/bin/ 子目录
-            ffmpeg_sdk_bin = os.path.join(self._app_dir, 'ffmpeg-sdk', 'bin')
-            if os.path.isdir(ffmpeg_sdk_bin):
-                env['PATH'] = ffmpeg_sdk_bin + os.pathsep + env['PATH']
-            popen_kwargs['env'] = env
-
             # Detect current theme to pass to simulator
             from qfluentwidgets import isDarkTheme
             theme = "dark" if isDarkTheme() else "light"
 
-            command = [
-                simulator_path,
-                "--config", config_for_simulator,
-                "--base-dir", self._base_dir,
-                "--app-dir", self._app_dir,
-                "--loop-cropbox",
-                f"{cropbox[0]},{cropbox[1]},{cropbox[2]},{cropbox[3]}",
-                "--loop-rotation", str(rotation),
-                "--loop-start-frame", str(loop_state["start_frame"]),
-                "--loop-end-frame", str(loop_end_frame),
-                "--theme", theme,
-            ]
+            launch_request = SimulatorLaunchRequest(
+                config_path=config_for_simulator,
+                base_dir=self._base_dir,
+                app_dir=self._app_dir,
+                theme=theme,
+                loop=MediaLaunchState(
+                    cropbox=cropbox,
+                    rotation=rotation,
+                    start_frame=loop_state["start_frame"],
+                    end_frame=loop_state["end_frame"],
+                ),
+            )
             if intro_state is not None:
-                intro_cropbox = intro_state["cropbox"]
-                intro_end_frame = max(
-                    intro_state["start_frame"], intro_state["end_frame"] - 1
+                launch_request = SimulatorLaunchRequest(
+                    config_path=config_for_simulator,
+                    base_dir=self._base_dir,
+                    app_dir=self._app_dir,
+                    theme=theme,
+                    loop=launch_request.loop,
+                    intro=MediaLaunchState(
+                        cropbox=intro_state["cropbox"],
+                        rotation=intro_state["rotation"],
+                        start_frame=intro_state["start_frame"],
+                        end_frame=intro_state["end_frame"],
+                    ),
                 )
-                command.extend([
-                    "--intro-cropbox",
-                    f"{intro_cropbox[0]},{intro_cropbox[1]},{intro_cropbox[2]},{intro_cropbox[3]}",
-                    "--intro-rotation", str(intro_state["rotation"]),
-                    "--intro-start-frame", str(intro_state["start_frame"]),
-                    "--intro-end-frame", str(intro_end_frame),
-                ])
 
-            proc = subprocess.Popen(command, **popen_kwargs)
+            proc = simulator_launcher.launch_cli(
+                launch_request,
+                simulator_path=simulator_path,
+            )
 
             logger.info(f"模拟器已启动: {simulator_path}")
 
@@ -1960,8 +1936,15 @@ class MainWindow(QMainWindow):
 
         if not hasattr(self, '_forum_widget'):
             try:
-                from _mext.ui.widget import MaterialForumWidget
-                self._forum_widget = MaterialForumWidget(parent=self)
+                from gui.plugin_host import (
+                    create_material_forum_plugin,
+                    default_plugin_context,
+                )
+                self._forum_plugin_handle = create_material_forum_plugin(
+                    parent=self,
+                    context=default_plugin_context(self._settings),
+                )
+                self._forum_widget = self._forum_plugin_handle.widget
                 self.content_layout.addWidget(self._forum_widget)
             except ImportError as exc:
                 logger.error("素材论坛模块加载失败，缺少必要依赖", exc_info=True)
@@ -2620,10 +2603,11 @@ class MainWindow(QMainWindow):
         elif setting_name == 'scale':
             logger.info(f"界面缩放已设置为: {value}")
 
-        elif setting_name.startswith('ssh_'):
-            # SSH 设置变更后同步到 RemotePage 的内存缓存
+        elif setting_name in {'remote_auto_restart_program'} or \
+                setting_name.startswith('ssh_'):
+            # Keep RemotePage's in-memory settings synchronized.
             if hasattr(self, '_remote_page'):
-                self._remote_page._ssh_config[setting_name] = value
+                self._remote_page._settings[setting_name] = value
 
         elif setting_name == 'auto_save':
             if value:
@@ -2748,6 +2732,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'logo_label'):
             logo_qss = f"#logo_label {{ background-color: white; color: {color_hex}; border-radius: 16px; padding: 8px 12px; font-size: 14px; font-weight: bold; }}"
             setCustomStyleSheet(self.logo_label, logo_qss, logo_qss)
+
+        if hasattr(self, '_forum_plugin_handle'):
+            self._forum_plugin_handle.apply_theme()
 
         logger.info(f"应用主题颜色: {color_hex}")
 
@@ -3182,7 +3169,7 @@ class MainWindow(QMainWindow):
             self.timeline.set_rotation(rotation)
 
     def _on_loop_rotation_changed(self, rotation: int):
-        """寰幆瑙嗛鏃嬭浆鍙樻洿"""
+        """循环视频旋转变更"""
         if self._is_timeline_bound_to(self.video_preview):
             self.timeline.set_rotation(rotation)
 
@@ -3721,17 +3708,17 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("导出失败")
             logger.error(f"导出失败: {message}")
 
-    def _on_ssh_upload_completed(self, success: bool, message: str):
-        """SSH 上传完成回调"""
-        if hasattr(self, '_ssh_upload_dialog') and self._ssh_upload_dialog:
-            self._ssh_upload_dialog.set_completed(success, message)
+    def _on_remote_upload_completed(self, success: bool, message: str):
+        """Remote HTTP upload completion callback."""
+        if hasattr(self, '_remote_upload_dialog') and self._remote_upload_dialog:
+            self._remote_upload_dialog.set_completed(success, message)
 
         if success:
             self.status_bar.showMessage(message)
-            logger.info(f"SSH 上传成功: {message}")
+            logger.info(f"RNDIS HTTP upload succeeded: {message}")
         else:
-            self.status_bar.showMessage("SSH 上传失败")
-            logger.error(f"SSH 上传失败: {message}")
+            self.status_bar.showMessage("远程上传失败")
+            logger.error(f"RNDIS HTTP upload failed: {message}")
 
     def _check_save(self) -> bool:
         """检查是否需要保存"""
@@ -3815,7 +3802,9 @@ class MainWindow(QMainWindow):
 
             self._auto_save_service.stop()
 
-            if hasattr(self, '_forum_widget'):
+            if hasattr(self, '_forum_plugin_handle'):
+                self._forum_plugin_handle.shutdown()
+            elif hasattr(self, '_forum_widget'):
                 self._forum_widget.shutdown()
 
             if hasattr(self, '_remote_page'):

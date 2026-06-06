@@ -1,7 +1,6 @@
 """
 导出服务 - 素材导出和打包
 """
-import json
 import os
 import sys
 import struct
@@ -31,6 +30,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, QObject
 
 from config.constants import get_resolution_spec
 from config.epconfig import EPConfig
+from core.file_utils import atomic_write_json
 from core.video_processor import find_ffmpeg, X264_PARAMS
 
 logger = logging.getLogger(__name__)
@@ -235,6 +235,7 @@ class ExportWorker(QThread):
         temp_dir = os.path.join(self._output_dir, "_temp_frames").replace("\\", "/")
         os.makedirs(temp_dir, exist_ok=True)
 
+        container = None
         try:
             # 使用 PyAV 解码视频，替代 cv2.VideoCapture
             # 参考: https://pyav.org/docs/stable/api/container.html
@@ -329,6 +330,7 @@ class ExportWorker(QThread):
                 frame_idx += 1
 
             container.close()
+            container = None
 
             if frames_written == 0:
                 raise RuntimeError("没有成功写入任何视频帧")
@@ -352,6 +354,11 @@ class ExportWorker(QThread):
             )
 
         finally:
+            if container is not None:
+                try:
+                    container.close()
+                except Exception:
+                    logger.debug("Failed to close PyAV container", exc_info=True)
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
@@ -380,6 +387,11 @@ class ExportWorker(QThread):
         if padded_w > 0 and padded_h > 0:
             vf_filters.append(f"pad={padded_w}:{padded_h}:0:0:black")
 
+        output_root, output_ext = os.path.splitext(output_file)
+        temp_output = f"{output_root}.tmp{output_ext or '.mp4'}"
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+
         cmd = [
             self._ffmpeg_path,
             "-hide_banner",
@@ -397,10 +409,15 @@ class ExportWorker(QThread):
             "-x264-params", X264_PARAMS,
             "-an",
             "-y",
-            output_file
+            temp_output
         ])
 
-        logger.info(f"执行ffmpeg CRF编码 (crf={crf_value}, preset={preset}): {' '.join(cmd)}")
+        logger.info(
+            "Running ffmpeg CRF encode (crf=%s, preset=%s, output=%s)",
+            crf_value,
+            preset,
+            os.path.basename(output_file),
+        )
 
         popen_kwargs = {
             'stdout': subprocess.PIPE,
@@ -428,6 +445,8 @@ class ExportWorker(QThread):
                     self._ffmpeg_process.kill()
                     self._ffmpeg_process.communicate()
                     self._ffmpeg_process = None
+                    if os.path.exists(temp_output):
+                        os.remove(temp_output)
                     raise InterruptedError("导出已取消")
 
         returncode = self._ffmpeg_process.returncode
@@ -436,8 +455,11 @@ class ExportWorker(QThread):
         if returncode != 0:
             stderr_msg = stderr[-500:] if stderr else "未知错误"
             logger.error(f"ffmpeg CRF编码 stderr: {stderr}")
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
             raise RuntimeError(f"ffmpeg CRF编码失败 (code {returncode}): {stderr_msg}")
 
+        os.replace(temp_output, output_file)
         logger.info("CRF编码完成")
 
     def _export_video_from_image(
@@ -514,8 +536,7 @@ class ExportWorker(QThread):
         config_path = os.path.join(self._output_dir, "epconfig.json")
         try:
             config_dict = self._epconfig.to_dict(normalize_paths=True)
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config_dict, f, ensure_ascii=False, indent=4)
+            atomic_write_json(config_path, config_dict, indent=4)
             logger.info(f"已生成配置: {config_path}")
         except Exception as e:
             logger.error(f"生成epconfig.json失败: {e}")

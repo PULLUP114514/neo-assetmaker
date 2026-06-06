@@ -39,12 +39,13 @@ Arknights Pass Material Toolbox — 用于制作明日方舟电子通行证 2.1 
 - 本地素材库管理
 - USB/MTP 设备管理
 
-### SSH 远程管理
+### EPass RNDIS 远程管理
 
 - 侧边栏远程管理入口（WiFi 图标）
-- SSH 连接配置（地址、端口、用户名、密码、远程路径）
-- 远程素材列表刷新，以及下载 / 删除 / 编辑入口
-- 远程文件管理器与 SSH 终端入口
+- 通过 `EPass RNDIS Remote NDIS Compatible Device` 自动连接设备
+- 固定访问 `http://192.168.137.2/` 的设备端 HTTP API
+- 连接时校验 RNDIS 路由和 `/api/v1/health` 设备协议信息
+- 远程素材列表刷新，以及上传 / 下载 / 删除 / 编辑入口
 - 一键上传文件到通行证设备，实时进度显示
 - 上传完毕后可选自动重启通行证程序
 
@@ -101,7 +102,7 @@ uv run python main.py
 2. **素材制作** — 核心功能，创建和编辑通行证素材
 3. **素材论坛** — 在线素材资源下载
 4. **项目介绍** — 访问项目官网获取最新信息
-5. **远程管理** — SSH 远程上传文件到通行证设备
+5. **远程管理** — 通过 EPass RNDIS HTTP API 同步文件到通行证设备
 6. **设置** — 主题、界面、视频、导出、网络等配置
 
 ### 创建项目
@@ -234,7 +235,7 @@ neo-assetmaker/
 │   │   ├── json_preview.py          # JSON 配置预览
 │   │   ├── timeline.py              # 时间轴控制
 │   │   ├── transition_preview.py    # 过渡效果预览
-│   │   ├── remote_page.py           # SSH 远程上传管理页面
+│   │   ├── remote_page.py           # EPass RNDIS HTTP 远程管理页面
 │   │   └── settings_page.py         # 设置页面
 │   └── dialogs/                     # 对话框
 │       ├── welcome_dialog.py        # 欢迎引导

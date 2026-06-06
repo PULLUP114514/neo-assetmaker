@@ -192,7 +192,7 @@ def _verify_modules(search_paths, project_root):
     # importlib.util.find_spec 使用完整的 sys.meta_path（包括 uv 的自定义 finder）
     # PathFinder.find_spec 只搜索给定的 path 列表
     pip_names = {"OpenGL": "PyOpenGL", "cv2": "opencv-python"}
-    critical_packages = ["OpenGL", "av", "cv2", "PyQt6"]
+    critical_packages = ["OpenGL", "av", "cv2", "PyQt6", "requests"]
     missing = []
 
     for pkg_name in critical_packages:
@@ -347,6 +347,11 @@ def run_cxfreeze(skip_flasher=False):
         "httpx",
         "httpcore",
         "httpx._transports",
+        "requests",
+        "urllib3",
+        "certifi",
+        "charset_normalizer",
+        "idna",
         "keyring",
         "keyring.backends",
         "platformdirs",

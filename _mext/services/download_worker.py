@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Optional
@@ -135,7 +136,7 @@ class DownloadWorker(QRunnable):
         import httpx
 
         headers: dict[str, str] = {}
-        if self.api_client.access_token:
+        if self.api_client.access_token and self.api_client.should_send_auth_to(self.url):
             headers["Authorization"] = f"Bearer {self.api_client.access_token}"
         if self._resume_offset > 0:
             headers["Range"] = f"bytes={self._resume_offset}-"
@@ -204,10 +205,8 @@ class DownloadWorker(QRunnable):
                 )
             logger.info("Hash verification passed for download %s", self.task_id)
 
-        # Atomic rename: .tmp -> final
-        if self.final_path.exists():
-            self.final_path.unlink()
-        self.temp_path.rename(self.final_path)
+        # Atomic replace: keep an existing final file until the new file is complete.
+        os.replace(self.temp_path, self.final_path)
 
         logger.info("Download %s completed: %s", self.task_id, self.final_path)
         self.signals.completed.emit(self.task_id, str(self.final_path))

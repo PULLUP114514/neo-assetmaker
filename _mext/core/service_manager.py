@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional
 from PyQt6.QtCore import QObject, pyqtSignal as Signal
 
 from _mext.core.config import Config, get_config
+from _mext.core.worker_registry import WorkerRegistry
 
 if TYPE_CHECKING:
     from _mext.services.api_client import ApiClient
@@ -55,6 +56,7 @@ class ServiceManager(QObject):
         self._auth_service: Optional[AuthService] = None
         self._download_engine: Optional[DownloadEngine] = None
         self._fido2_client: Optional[Fido2ClientWrapper] = None
+        self._worker_registry = WorkerRegistry()
 
         self._is_shutdown = False
 
@@ -64,6 +66,11 @@ class ServiceManager(QObject):
     def config(self) -> Config:
         """Return the application configuration."""
         return self._config
+
+    @property
+    def worker_registry(self) -> WorkerRegistry:
+        """Return the extension worker registry."""
+        return self._worker_registry
 
     @property
     def api_client(self) -> ApiClient:
@@ -83,6 +90,7 @@ class ServiceManager(QObject):
             self._auth_service = AuthService(
                 api_client=self.api_client,
                 config=self._config,
+                worker_registry=self._worker_registry,
             )
             # Wire auth signals
             self._auth_service.auth_changed.connect(self.auth_state_changed.emit)
@@ -97,6 +105,7 @@ class ServiceManager(QObject):
             self._download_engine = DownloadEngine(
                 api_client=self.api_client,
                 config=self._config,
+                worker_registry=self._worker_registry,
                 parent=self,
             )
             # Wire download signals
@@ -119,28 +128,33 @@ class ServiceManager(QObject):
 
     # -- Lifecycle --
 
-    def shutdown(self) -> None:
+    def shutdown(self, timeout_ms: int = 2000) -> bool:
         """Cleanly shut down all initialized services.
 
         Stops background threads, closes connections, and releases resources.
         Safe to call multiple times.
         """
         if self._is_shutdown:
-            return
+            return True
 
         self._is_shutdown = True
+        ok = True
 
         # Cancel active downloads
         if self._download_engine is not None:
-            self._download_engine.cancel_all()
+            ok = self._download_engine.shutdown(timeout_ms=timeout_ms) and ok
 
         # Logout / cleanup auth
         if self._auth_service is not None:
             self._auth_service.cleanup()
 
+        ok = self._worker_registry.shutdown(timeout_ms=timeout_ms) and ok
+
         # Close HTTP client
         if self._api_client is not None:
             self._api_client.close()
+
+        return ok
 
     @property
     def is_shutdown(self) -> bool:

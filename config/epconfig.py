@@ -8,6 +8,8 @@ import uuid as uuid_lib
 import json
 import os
 
+from core.file_utils import atomic_write_json
+
 CONFIG_FILENAME = "epconfig.json"
 
 
@@ -367,8 +369,7 @@ class EPConfig:
             if directory and not os.path.exists(directory):
                 os.makedirs(directory)
 
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(self.to_dict(), f, ensure_ascii=False, indent=4)
+            atomic_write_json(filepath, self.to_dict(), indent=4)
         except PermissionError:
             raise RuntimeError(f"无法保存到 {filepath}，权限不足")
 

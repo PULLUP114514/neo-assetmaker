@@ -61,6 +61,19 @@ def _load_env_file(env_path: Path) -> dict[str, str]:
     return env_vars
 
 
+def _safe_download_filename(filename: str) -> str:
+    """Validate that a download filename cannot escape the download directory."""
+    candidate = Path(filename)
+    if (
+        not filename
+        or candidate.is_absolute()
+        or candidate.name != filename
+        or ".." in candidate.parts
+    ):
+        raise ValueError(f"Unsafe download filename: {filename!r}")
+    return filename
+
+
 @dataclass
 class Config:
     """Central configuration object for the asset store client.
@@ -196,10 +209,12 @@ class Config:
         """Return a temporary download path for a file."""
         from _mext.core.constants import DOWNLOAD_TEMP_SUFFIX
 
+        filename = _safe_download_filename(filename)
         return self.download_dir / f"{filename}{DOWNLOAD_TEMP_SUFFIX}"
 
     def get_final_download_path(self, filename: str) -> Path:
         """Return the final download path for a file."""
+        filename = _safe_download_filename(filename)
         return self.download_dir / filename
 
 

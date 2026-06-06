@@ -1,4 +1,14 @@
 # 更新日志
+
+### v2.1.3
+
+**远程管理迁移到 EPass RNDIS HTTP**
+- 远程管理主链路从 SSH/SCP 改为 `EPass RNDIS Remote NDIS Compatible Device` + HTTP API。
+- 不再需要配置远程 IP、端口、用户名、密码或 SSH 远程路径；客户端固定访问 `http://192.168.137.2/`。
+- 新增 RNDIS 网卡检测、设备 health 协议校验、路由 ifIndex 校验和设置页“检测设备”入口。
+- 素材下载改为安全解压，拒绝 zip slip、绝对路径、盘符路径和超限压缩包。
+- 删除旧 SSH 远程管理代码和 `scp` 运行依赖，避免旧远程执行能力继续进入发布包。
+- CI 增加 Python 单元测试、Rust 测试和 `requests` 打包 smoke 检查。
 ### v2.1.2
 - 删除部分无用参数，优化编码使其更贴合使用环境。
 ### v2.1.1

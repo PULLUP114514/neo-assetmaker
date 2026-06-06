@@ -1,6 +1,6 @@
 # 用户手册
 
-本手册对应当前仓库中的 `v2.1.0` 代码。版本变更和功能增量请查看 [CHANGELOG.md](CHANGELOG.md)。
+本手册对应当前仓库中的 `v2.1.3` 代码。版本变更和功能增量请查看 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 快速开始
 
@@ -112,7 +112,7 @@ uv run python main.py
 ### 一键上传
 
 - 配置面板提供“一键上传”按钮
-- 该流程会先执行导出，再将导出目录通过 SSH 上传到设备
+- 该流程会先执行导出，再通过 EPass RNDIS HTTP API 上传到设备
 - 可在设置中控制上传完成后是否自动重启远端 `DrmApp`
 
 ## 远程管理
@@ -121,14 +121,13 @@ uv run python main.py
 
 ### 使用前准备
 
-在“设置”页中填写 SSH 参数：
+使用前请连接通行证设备，并确认 Windows 中出现
+`EPass RNDIS Remote NDIS Compatible Device` 网卡。软件会固定访问
+`http://192.168.137.2/`，素材目录由设备端 HTTP API 管理为 `/assets`。
 
-- SSH 地址
-- SSH 端口
-- SSH 用户
-- SSH 密码
-- 默认上传路径
-- 上传完成后是否自动重启程序
+设置页提供“检测设备”按钮，可检查 RNDIS 网卡、到 `192.168.137.2` 的路由以及
+`/api/v1/health` 接口状态。“上传完成后自动重启 DrmApp”仅在设备端支持
+`/api/v1/drm/restart` 时生效。
 
 ### 页面功能
 
@@ -136,8 +135,7 @@ uv run python main.py
 - 刷新远程素材列表
 - 上传本地素材
 - 重启远端 `DrmApp`
-- 打开远程文件管理器
-- 打开 SSH 终端
+- 查看实时画面（需要设备端提供 HTTP MJPEG 接口）
 - 查看操作日志
 
 ### 远程素材列表
@@ -159,7 +157,7 @@ uv run python main.py
 - 个性化设置：临时项目、欢迎对话框、状态栏、自动保存
 - 视频与导出：硬件加速预览
 - 网络设置：GitHub 加速、代理
-- 自动上传：SSH 相关配置
+- 自动上传：EPass RNDIS 连接检测和远程上传配置
 - 关于：快捷键帮助、检查更新、版本信息
 
 ## 快捷键总表
@@ -189,12 +187,13 @@ uv run python main.py
 - 确认视频文件未损坏
 - 若使用打包版本，检查 FFmpeg 相关依赖是否随安装包完整分发
 
-### SSH 上传失败
+### RNDIS 远程上传失败
 
-- 确认设备网络可达
-- 检查 SSH 地址、端口、用户名和密码
-- 确认远端上传路径存在且可写
-- 如启用了自动重启，确认远端具备重启 `DrmApp` 的权限
+- 确认设备已通过 USB 连接，并出现 EPass RNDIS 网卡
+- 确认浏览器可访问 `http://192.168.137.2/api/v1/health`
+- 确认 health 响应包含 `status`、`device`、`protocol_version`、`device_id` 和 `capabilities`
+- 确认设备端 HTTP API 支持素材上传接口
+- 如启用了自动重启，确认设备端支持 `/api/v1/drm/restart`
 
 ### 查看日志
 
