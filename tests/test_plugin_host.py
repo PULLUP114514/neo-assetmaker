@@ -1,5 +1,6 @@
 import unittest
 
+from gui.main_window import MainWindow
 from gui.plugin_host import PluginHandle, ThemeTokens, default_plugin_context
 from _mext.ui import styles as mext_styles
 
@@ -77,6 +78,15 @@ class PluginHostTests(unittest.TestCase):
             default_plugin_context({"language": "中文"}).locale,
             "zh_CN",
         )
+
+    def test_main_window_forum_context_uses_user_settings(self):
+        window = MainWindow.__new__(MainWindow)
+        window._read_user_settings = lambda: {"language": "English"}
+
+        context = MainWindow._create_forum_plugin_context(window)
+
+        self.assertEqual(context.settings, {"language": "English"})
+        self.assertEqual(context.locale, "en_US")
 
 
 if __name__ == "__main__":

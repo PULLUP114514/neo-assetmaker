@@ -150,10 +150,9 @@ class Config:
         # Merge: local .env < config .env < real env vars
         merged = {**local_vars, **file_vars}
 
-        # Apply overrides
-        self.api_base_url = os.environ.get(
-            "MM_API_BASE_URL", merged.get("MM_API_BASE_URL", self.api_base_url)
-        )
+        # Apply runtime overrides. The API base URL is intentionally not
+        # overrideable through process environment or .env files; release
+        # builds bake it into _mext.core.constants.API_BASE_URL.
         self.api_timeout = int(
             os.environ.get("MM_API_TIMEOUT", merged.get("MM_API_TIMEOUT", str(self.api_timeout)))
         )

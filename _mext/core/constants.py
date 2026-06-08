@@ -8,7 +8,7 @@ APP_AUTHOR: str = "AssetStore"
 
 # API configuration
 API_VERSION: str = "v1"
-API_BASE_URL: str = "https://api.material-market.example.com"
+API_BASE_URL: str = "http://192.168.31.199:5669"
 API_TIMEOUT_SECONDS: int = 30
 API_STREAM_TIMEOUT_SECONDS: int = 300
 

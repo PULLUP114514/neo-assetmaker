@@ -219,6 +219,7 @@ class SettingsPage(QWidget):
         api_url_layout.setSpacing(12)
         api_url_layout.addWidget(BodyLabel("服务器地址：", content))
         self._api_url_edit = LineEdit(content)
+        self._api_url_edit.setReadOnly(True)
         self._api_url_edit.setText(self._services.config.api_base_url)
         api_url_layout.addWidget(self._api_url_edit, stretch=1)
         layout.addLayout(api_url_layout)

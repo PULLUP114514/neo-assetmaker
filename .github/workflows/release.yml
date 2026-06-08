@@ -102,6 +102,7 @@ jobs:
     with:
       skip_flasher: false
       uv_sync_mode: "locked"
+      obfuscate: true
       version_override: ${{ needs.check-version.outputs.version }}
 
   release:

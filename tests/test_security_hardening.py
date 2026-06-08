@@ -1,8 +1,10 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from _mext.core.config import Config
+from _mext.core.constants import API_BASE_URL
 from core.update_service import UpdateCheckWorker
 
 
@@ -91,6 +93,54 @@ class DownloadPathTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 config.get_temp_download_path("nested/evil.bin")
+
+
+class BakedApiConfigTests(unittest.TestCase):
+    def make_config(self, root: Path) -> Config:
+        return Config(
+            config_dir=root / "config",
+            cache_dir=root / "cache",
+            download_dir=root / "downloads",
+        )
+
+    def test_api_base_url_ignores_process_environment_override(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                "os.environ",
+                {"MM_API_BASE_URL": "http://example.invalid:9999"},
+            ):
+                config = self.make_config(Path(temp_dir))
+
+        self.assertEqual(config.api_base_url, API_BASE_URL)
+
+    def test_api_base_url_ignores_env_file_override(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / ".env").write_text(
+                "MM_API_BASE_URL=http://example.invalid:9999\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict("os.environ", {}, clear=True):
+                config = self.make_config(root)
+
+        self.assertEqual(config.api_base_url, API_BASE_URL)
+
+    def test_api_base_url_ignores_project_local_env_override(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".env").write_text(
+                "MM_API_BASE_URL=http://example.invalid:9999\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict("os.environ", {}, clear=True):
+                with patch("pathlib.Path.cwd", return_value=root):
+                    config = self.make_config(root)
+
+        self.assertEqual(config.api_base_url, API_BASE_URL)
 
 
 if __name__ == "__main__":

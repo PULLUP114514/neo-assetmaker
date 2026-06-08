@@ -11,6 +11,10 @@ on:
         type: boolean
         default: false
         description: '跳过 epass_flasher/bin 检查'
+      obfuscate:
+        type: boolean
+        default: false
+        description: 'Use PyArmor to obfuscate first-party Python sources'
       uv_sync_mode:
         type: string
         default: "locked"
@@ -133,6 +137,9 @@ jobs:
           else
             uv sync --locked
           fi
+          if [ "${{ inputs.obfuscate }}" = "true" ]; then
+            uv pip install "pyarmor>=8,<9"
+          fi
           uv run --no-sync python -c "import OpenGL, av, cv2, PyQt6, numpy, requests; import core.rndis_device_service, core.http_remote_service, gui.workers.rndis_http_workers; print('All packages OK')"
 
       - name: Run Python tests
@@ -173,6 +180,7 @@ jobs:
         run: |
           $buildArgs = @()
           if ("${{ inputs.skip_flasher }}" -eq "true") { $buildArgs += "--skip-flasher" }
+          if ("${{ inputs.obfuscate }}" -eq "true") { $buildArgs += "--obfuscate" }
           uv run --no-sync python build.py @buildArgs
         env:
           # qfluentwidgets 等第三方库触发的 SyntaxWarning

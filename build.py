@@ -14,6 +14,10 @@ sys.setrecursionlimit(10000)
 PROJECT_NAME = "ArknightsPassMaker"
 MAIN_SCRIPT = "main.py"
 ICON_FILE = "resources/icons/favicon.ico"
+OBFUSCATION_DIR = os.path.join(".tmp", "pyarmor-src")
+# Keep the Qt GUI package in plain source for now: it has legacy encoding and
+# dynamic Qt/plugin patterns that are fragile under source-level obfuscation.
+OBFUSCATABLE_ENTRIES = ["main.py", "core", "config", "utils", "_mext"]
 
 
 def get_version() -> str:
@@ -38,7 +42,7 @@ ISS_FILE = "installer.iss"
 INNO_SETUP_DIR = "tools/innosetup"
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=f"{PROJECT_NAME} Build Tool")
     parser.add_argument(
         "--no-installer", action="store_true", help="Skip installer packaging"
@@ -49,7 +53,12 @@ def parse_args():
         action="store_true",
         help="Skip packaging epass_flasher/bin even if it exists",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--obfuscate",
+        action="store_true",
+        help="Obfuscate first-party Python sources with PyArmor before packaging",
+    )
+    return parser.parse_args(argv)
 
 
 def get_site_packages():
@@ -268,19 +277,99 @@ def clean_build():
         if os.path.exists(d):
             shutil.rmtree(d)
             print(f"  Removed: {d}")
+    if os.path.exists(OBFUSCATION_DIR):
+        shutil.rmtree(OBFUSCATION_DIR)
+        print(f"  Removed: {OBFUSCATION_DIR}")
 
     print("Cleaning __pycache__ directories...")
     _clean_pycache()
 
 
-def run_cxfreeze(skip_flasher=False):
+def _find_pyarmor_executable():
+    """Return a PyArmor executable path if it is available."""
+    candidates = [
+        shutil.which("pyarmor"),
+        os.path.join(os.path.dirname(sys.executable), "pyarmor.exe"),
+        os.path.join(os.path.dirname(sys.executable), "pyarmor"),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def prepare_obfuscated_source():
+    """Generate a conservative PyArmor-obfuscated source tree."""
+    pyarmor = _find_pyarmor_executable()
+    if not pyarmor:
+        print("Error: PyArmor not found. Install it before using --obfuscate.")
+        return None
+
+    source_root = os.path.abspath(OBFUSCATION_DIR)
+    if os.path.exists(source_root):
+        shutil.rmtree(source_root)
+    os.makedirs(source_root, exist_ok=True)
+
+    command = [
+        pyarmor,
+        "gen",
+        "-r",
+        "-O",
+        source_root,
+        *OBFUSCATABLE_ENTRIES,
+    ]
+    print("Running PyArmor obfuscation...")
+    print("  " + " ".join(command))
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as exc:
+        print(f"PyArmor failed: {exc}")
+        return None
+
+    missing_entries = [
+        entry
+        for entry in OBFUSCATABLE_ENTRIES
+        if not os.path.exists(os.path.join(source_root, entry))
+    ]
+    if missing_entries:
+        print("PyArmor output is incomplete. Missing:")
+        for entry in missing_entries:
+            print(f"  {entry}")
+        return None
+
+    if not _pyarmor_runtime_packages(source_root):
+        print("PyArmor output missing runtime package: pyarmor_runtime_*")
+        return None
+
+    return source_root
+
+
+def _pyarmor_runtime_packages(source_root):
+    """Return PyArmor runtime package names and paths in a source tree."""
+    if not source_root or not os.path.isdir(source_root):
+        return []
+    result = []
+    for name in sorted(os.listdir(source_root)):
+        path = os.path.join(source_root, name)
+        if name.startswith("pyarmor_runtime") and os.path.isdir(path):
+            result.append((name, path))
+    return result
+
+
+def run_cxfreeze(skip_flasher=False, source_root=None):
     """执行 cx_Freeze 打包"""
 
     # 确保项目根目录在 Python 路径中（防御性措施，正常应通过 uv sync --group dev 的 editable install 实现）
     project_root = os.path.dirname(os.path.abspath(__file__))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
+    source_root = os.path.abspath(source_root or project_root)
+    for path in (project_root, source_root):
+        if path in sys.path:
+            sys.path.remove(path)
+    sys.path.insert(0, source_root)
+    if project_root != source_root:
+        sys.path.insert(1, project_root)
     print(f"Project root: {project_root}")
+    print(f"Source root: {source_root}")
 
     # 输出构建环境诊断信息
     _diagnose_build_env()
@@ -290,7 +379,7 @@ def run_cxfreeze(skip_flasher=False):
     # 必须显式包含 site-packages，否则 uv/conda 等环境中第三方包可能找不到。
     import sysconfig as _sc
 
-    search_paths = [project_root] + list(sys.path)
+    search_paths = [source_root] + list(sys.path)
     for extra in [_sc.get_path("purelib"), _sc.get_path("platlib")]:
         if extra and os.path.isdir(extra) and extra not in search_paths:
             search_paths.insert(1, extra)
@@ -366,6 +455,10 @@ def run_cxfreeze(skip_flasher=False):
         "utils",
         "_mext",
     ]
+    pyarmor_runtimes = _pyarmor_runtime_packages(source_root)
+    for runtime_name, _runtime_path in pyarmor_runtimes:
+        if runtime_name not in packages:
+            packages.append(runtime_name)
 
     includes = [
         # ── PyOpenGL: 精确包含，避免 packages 递归发现导致构建失败 ──
@@ -446,6 +539,9 @@ def run_cxfreeze(skip_flasher=False):
             "class_icons",
         ),  # 运行时通过 class_icons/ 相对路径访问
     ]
+    for runtime_name, runtime_path in pyarmor_runtimes:
+        include_files.append((runtime_path, runtime_name))
+        print(f"  Including PyArmor runtime: {runtime_path}")
     if os.path.exists("ffmpeg.exe"):
         include_files.append(("ffmpeg.exe", "ffmpeg.exe"))
     if os.path.exists("ffprobe.exe"):
@@ -537,7 +633,7 @@ def run_cxfreeze(skip_flasher=False):
             options={"build_exe": build_options},
             executables=[
                 Executable(
-                    script=MAIN_SCRIPT,
+                    script=os.path.join(source_root, MAIN_SCRIPT),
                     base=base,
                     target_name=f"{PROJECT_NAME}.exe",
                     icon=ICON_FILE if os.path.exists(ICON_FILE) else None,
@@ -640,11 +736,17 @@ def main():
     if args.clean:
         clean_build()
 
+    source_root = None
+    if args.obfuscate:
+        source_root = prepare_obfuscated_source()
+        if not source_root:
+            sys.exit(1)
+
     print("\n" + "=" * 50)
     print("Running cx_Freeze...")
     print("=" * 50)
 
-    if not run_cxfreeze(skip_flasher=args.skip_flasher):
+    if not run_cxfreeze(skip_flasher=args.skip_flasher, source_root=source_root):
         sys.exit(1)
 
     print(f"\ncx_Freeze done: {BUILD_DIR}/")

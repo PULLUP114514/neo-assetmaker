@@ -1938,11 +1938,10 @@ class MainWindow(QMainWindow):
             try:
                 from gui.plugin_host import (
                     create_material_forum_plugin,
-                    default_plugin_context,
                 )
                 self._forum_plugin_handle = create_material_forum_plugin(
                     parent=self,
-                    context=default_plugin_context(self._settings),
+                    context=self._create_forum_plugin_context(),
                 )
                 self._forum_widget = self._forum_plugin_handle.widget
                 self.content_layout.addWidget(self._forum_widget)
@@ -1967,6 +1966,12 @@ class MainWindow(QMainWindow):
 
         self._forum_widget.setVisible(True)
         self.status_bar.showMessage("素材论坛模式")
+
+    def _create_forum_plugin_context(self):
+        """Create plugin context from the current user settings."""
+        from gui.plugin_host import default_plugin_context
+
+        return default_plugin_context(self._read_user_settings())
 
     def _on_sidebar_about(self):
         """侧边栏：项目介绍"""
