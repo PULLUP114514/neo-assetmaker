@@ -112,5 +112,9 @@ all business data.
   Nginx.
 - The client forum and web admin share API contracts but remain separate UI
   implementations.
+- The desktop client forum API base URL is baked in `_mext.core.constants`.
+  Runtime overrides through `MM_API_BASE_URL` or `.env` files are intentionally
+  ignored so GitHub-built client packages do not depend on host-level
+  environment variables.
 - Future claims that a framework rewrite is valid must cite both framework
   runtime documentation and repository-specific build/API evidence.

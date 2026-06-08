@@ -291,6 +291,10 @@ uv run python build.py --no-installer
 # 即使本地存在 flasher 目录，也不把它打进安装包
 uv run python build.py --skip-flasher
 
+# 使用 PyArmor 先混淆项目内 Python 源码，再交给 cx_Freeze 打包
+uv pip install "pyarmor>=8,<9"
+uv run python build.py --obfuscate
+
 # 或使用批处理包装器（自动安装依赖）
 build.bat
 ```
@@ -308,7 +312,7 @@ cd simulator && cargo build --release
 GitHub Actions 工作流位于 `.github/workflows/`：
 
 - **build.yml** — push/PR 时触发 CI，并调用 `build-app.yml` 完成 Rust 编译、Python 打包和 Inno Setup 安装包构建
-- **release.yml** — `docs/CHANGELOG.md` 顶部版本号变更时自动创建 GitHub Release
+- **release.yml** — `docs/CHANGELOG.md` 顶部版本号变更时自动创建 GitHub Release，并默认启用 PyArmor 混淆构建
 
 构建环境：Windows Latest, Python 3.11, uv, Rust stable, FFmpeg, Inno Setup
 
@@ -325,7 +329,7 @@ GitHub Actions 工作流位于 `.github/workflows/`：
 | 模拟器 | Rust (egui + FFmpeg) | `simulator/` |
 | IPC | Windows 命名管道 (JSON) | `simulator/src/ipc/` |
 | 视频处理 | PyAV + OpenGL + OpenCV (Python) + FFmpeg (Rust) | `core/`, `gui/widgets/`, `simulator/` |
-| 打包 | cx_Freeze + Inno Setup | `build.py` |
+| 打包 | cx_Freeze + Inno Setup + 可选 PyArmor 混淆 | `build.py` |
 | 依赖管理 | uv + pyproject.toml | `pyproject.toml` |
 | CI/CD | GitHub Actions | `.github/workflows/` |
 

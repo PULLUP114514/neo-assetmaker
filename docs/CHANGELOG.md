@@ -1,5 +1,15 @@
 # 更新日志
 
+### v2.1.4
+
+**素材论坛客户端接入与构建硬化**
+- 素材论坛 API 地址内置为 `http://192.168.31.199:5669`，不再通过 `MM_API_BASE_URL`、项目 `.env` 或用户配置目录 `.env` 覆盖，避免污染系统环境变量。
+- 设置页中的服务器地址改为只读展示，业务判断统一使用 `_mext.core.constants.API_BASE_URL`。
+- 修复侧边栏打开素材论坛时访问不存在的 `MainWindow._settings` 导致初始化失败的问题，插件上下文改为从当前 `user_settings.json` 读取。
+- 构建脚本新增 `--obfuscate`，发布构建会先使用 PyArmor 混淆 `main.py`、`core/`、`config/`、`utils/` 和 `_mext/`，并校验输出包与 `pyarmor_runtime_*` 存在后再交给 cx_Freeze。
+- GitHub Actions 手动构建支持选择是否混淆，release 构建默认启用混淆。
+- 新增回归测试覆盖论坛上下文、API 内置策略、根目录 `.env` 覆盖防护和 PyArmor 输出校验。
+
 ### v2.1.3
 
 **远程管理迁移到 EPass RNDIS HTTP**
