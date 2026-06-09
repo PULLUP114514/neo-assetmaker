@@ -34,7 +34,6 @@ logs/
 Thumbs.db
 
 # Large executables
-ffmpeg.exe
 *.exe
 
 # Test data
@@ -46,9 +45,6 @@ CLAUDE.md
 
 # Temporary update directory
 temp_update/
-ffmpeg
-ffplay
-ffprobe
 
 tmp/
 

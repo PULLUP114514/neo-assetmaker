@@ -176,9 +176,9 @@ class SettingsPage(QWidget):
             "检查更新", FluentIcon.UPDATE, "检查更新",
             content="检查是否有新版本可用", parent=self.aboutGroup)
 
-        from config.constants import APP_NAME, APP_VERSION
+        from config.constants import APP_NAME, APP_VERSION_LABEL
         self.aboutCard = SettingCard(
-            FluentIcon.INFO, f"{APP_NAME} v{APP_VERSION}",
+            FluentIcon.INFO, f"{APP_NAME} v{APP_VERSION_LABEL}",
             "明日方舟通行证素材制作器\n"
             "作者: Rafael_ban & 初微弦音 & 涙不在为你而流 & 蓝屏的此电脑-PULLUP\n"
             "© 2026 罗德岛工程部",

@@ -100,9 +100,6 @@ class SimulatorLauncher:
     def build_environment(self) -> dict[str, str]:
         env = os.environ.copy()
         env["PATH"] = str(self.app_dir) + os.pathsep + env.get("PATH", "")
-        ffmpeg_sdk_bin = self.app_dir / "ffmpeg-sdk" / "bin"
-        if ffmpeg_sdk_bin.is_dir():
-            env["PATH"] = str(ffmpeg_sdk_bin) + os.pathsep + env["PATH"]
         return env
 
     def launch_cli(

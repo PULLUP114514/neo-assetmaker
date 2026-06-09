@@ -3,7 +3,7 @@
 #define MyAppName "ArknightsPassMaker"
 #define MyAppNameCN "明日方舟通行证素材工具箱"
 #ifndef MyAppVersion
-  #define MyAppVersion "2.1.4"
+  #define MyAppVersion "2.1.5"
 #endif
 #define MyAppPublisher "Rafael-ban"
 #define MyAppURL "https://github.com/rhodesepass/neo-assetmaker"

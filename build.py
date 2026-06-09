@@ -18,6 +18,16 @@ OBFUSCATION_DIR = os.path.join(".tmp", "pyarmor-src")
 # Keep the Qt GUI package in plain source for now: it has legacy encoding and
 # dynamic Qt/plugin patterns that are fragile under source-level obfuscation.
 OBFUSCATABLE_ENTRIES = ["main.py", "core", "config", "utils", "_mext"]
+MEDIA_TOOL_DIR = os.path.join("tools", "media")
+MEDIA_TOOL_SOURCE_DIRS = ("", MEDIA_TOOL_DIR)
+MEDIA_TOOL_CANDIDATES = [
+    ("mpv.exe", os.path.join(MEDIA_TOOL_DIR, "mpv.exe")),
+    ("VSPipe.exe", os.path.join(MEDIA_TOOL_DIR, "VSPipe.exe")),
+    ("x264-7mod.exe", os.path.join(MEDIA_TOOL_DIR, "x264-7mod.exe")),
+    ("mp4box.exe", os.path.join(MEDIA_TOOL_DIR, "mp4box.exe")),
+    ("lsmash-muxer.exe", os.path.join(MEDIA_TOOL_DIR, "lsmash-muxer.exe")),
+    ("muxer.exe", os.path.join(MEDIA_TOOL_DIR, "muxer.exe")),
+]
 
 
 def get_version() -> str:
@@ -162,7 +172,7 @@ def _diagnose_build_env():
     for i, p in enumerate(sys.path):
         print(f"    [{i}] {p}")
     # 关键包定位
-    for pkg in ("OpenGL", "av", "cv2", "PyQt6", "cx_Freeze", "numpy"):
+    for pkg in ("OpenGL", "cv2", "PyQt6", "cx_Freeze", "numpy"):
         spec = importlib.util.find_spec(pkg)
         status = spec.origin if spec else "NOT FOUND"
         print(f"  {pkg}: {status}")
@@ -201,7 +211,7 @@ def _verify_modules(search_paths, project_root):
     # importlib.util.find_spec 使用完整的 sys.meta_path（包括 uv 的自定义 finder）
     # PathFinder.find_spec 只搜索给定的 path 列表
     pip_names = {"OpenGL": "PyOpenGL", "cv2": "opencv-python"}
-    critical_packages = ["OpenGL", "av", "cv2", "PyQt6", "requests"]
+    critical_packages = ["OpenGL", "cv2", "PyQt6", "requests"]
     missing = []
 
     for pkg_name in critical_packages:
@@ -257,9 +267,6 @@ def check_requirements():
     if not os.path.exists(MAIN_SCRIPT):
         print(f"Error: {MAIN_SCRIPT} not found")
         return False
-
-    print(f"  ffmpeg.exe: {'found' if os.path.exists('ffmpeg.exe') else 'not found'}")
-    print(f"  ffprobe.exe: {'found' if os.path.exists('ffprobe.exe') else 'not found'}")
 
     iscc = find_inno_setup()
     if iscc:
@@ -356,6 +363,19 @@ def _pyarmor_runtime_packages(source_root):
     return result
 
 
+def _collect_media_tool_include_files():
+    """Return optional media tools found in the project root or tools/media."""
+    include_files = []
+    for filename, target_path in MEDIA_TOOL_CANDIDATES:
+        for source_dir in MEDIA_TOOL_SOURCE_DIRS:
+            source_path = os.path.join(source_dir, filename) if source_dir else filename
+            if os.path.exists(source_path):
+                include_files.append((source_path, target_path))
+                print(f"  Including media tool: {source_path} -> {target_path}")
+                break
+    return include_files
+
+
 def run_cxfreeze(skip_flasher=False, source_root=None):
     """执行 cx_Freeze 打包"""
 
@@ -417,9 +437,6 @@ def run_cxfreeze(skip_flasher=False, source_root=None):
         "PyQt6.QtOpenGLWidgets",
         "PyQt6.QtOpenGL",
         "qfluentwidgets",
-        # av (PyAV) 不放在 packages 中 — cx_Freeze 7.2.10 的 PathFinder.find_spec
-        # 无法定位 PyAV 17+ 的 abi3 C 扩展包（finder.py:383 返回 None）。
-        # 改为通过 include_files 手动复制 av/ 和 av.libs/ 目录。
         # PyOpenGL 不放在 packages 中 — packages 会触发 cx_Freeze 的
         # _import_all_sub_modules() 递归扫描整个 OpenGL/ 目录(2800+ 文件),
         # 任何子模块加载失败都会导致 ImportError 中止构建。
@@ -542,25 +559,7 @@ def run_cxfreeze(skip_flasher=False, source_root=None):
     for runtime_name, runtime_path in pyarmor_runtimes:
         include_files.append((runtime_path, runtime_name))
         print(f"  Including PyArmor runtime: {runtime_path}")
-    if os.path.exists("ffmpeg.exe"):
-        include_files.append(("ffmpeg.exe", "ffmpeg.exe"))
-    if os.path.exists("ffprobe.exe"):
-        include_files.append(("ffprobe.exe", "ffprobe.exe"))
-
-    # av (PyAV): 手动包含，绕过 cx_Freeze PathFinder（参见 packages 列表中的注释）
-    # include_files 在 freezer.py:117 process_path_specs 中处理，直接复制目录，
-    # 不经过 PathFinder.find_spec，冻结应用的 lib/ 目录在运行时会被加入 sys.path。
-    av_pkg_dir = os.path.join(site_packages, "av")
-    if os.path.isdir(av_pkg_dir):
-        include_files.append((av_pkg_dir, "lib/av"))
-        print(f"  Including av package: {av_pkg_dir}")
-    else:
-        print(f"  WARNING: av package not found at {av_pkg_dir}")
-    # av.libs 包含 FFmpeg DLL（Windows delvewheel 打包，cx_Freeze hooks/av.py:26 原本处理）
-    av_libs_dir = os.path.join(site_packages, "av.libs")
-    if os.path.isdir(av_libs_dir):
-        include_files.append((av_libs_dir, "lib/av.libs"))
-        print(f"  Including av.libs: {av_libs_dir}")
+    include_files.extend(_collect_media_tool_include_files())
 
     # 添加 Rust 模拟器
     simulator_exe = os.path.join(
@@ -571,15 +570,6 @@ def run_cxfreeze(skip_flasher=False, source_root=None):
         target_path = os.path.join("simulator", "arknights_pass_simulator.exe")
         include_files.append((simulator_exe, target_path))
         print(f"  Including simulator: {simulator_exe}")
-
-    # 添加 FFmpeg DLL（模拟器运行时依赖）
-    ffmpeg_sdk_bin = os.path.join("ffmpeg-sdk", "bin")
-    if os.path.exists(ffmpeg_sdk_bin):
-        for dll in os.listdir(ffmpeg_sdk_bin):
-            if dll.endswith(".dll"):
-                src = os.path.join(ffmpeg_sdk_bin, dll)
-                include_files.append((src, dll))
-                print(f"  Including FFmpeg DLL: {dll}")
 
     # flasher_dialog 运行时会直接调用 epass_flasher/bin 下的工具。
     # 缺失时不再中止构建，保留对话框功能，由运行时自行提示或引导下载。

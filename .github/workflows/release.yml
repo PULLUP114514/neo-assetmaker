@@ -135,27 +135,37 @@ jobs:
           VERSION="${{ needs.check-version.outputs.version }}"
           # 转义版本号中的 . (正则通配符 → 字面量)
           VERSION_ESC=$(echo "$VERSION" | sed 's/\./\\./g')
+          VERSION_HEADER_RE="^### v${VERSION_ESC}([^0-9.]|$)"
 
           # 使用 awk 状态机精确提取当前版本的更新日志
-          # - 找到精确版本头 → 开始输出
+          # - 找到当前版本头 → 开始输出，允许标题带“测试预览版”等后缀
           # - 遇到下一个版本头 → 立即退出
-          CHANGELOG=$(awk "
-            /^### v${VERSION_ESC}$/ { found=1 }
-            found && /^### v[0-9]/ && !/^### v${VERSION_ESC}$/ { exit }
+          CHANGELOG=$(awk -v header_re="$VERSION_HEADER_RE" '
+            $0 ~ header_re { found=1 }
+            found && /^### v[0-9]/ && $0 !~ header_re { exit }
             found { print }
-          " docs/CHANGELOG.md)
+          ' docs/CHANGELOG.md)
 
           if [ -z "$CHANGELOG" ]; then
             echo "::warning::未能从 CHANGELOG 中提取 v${VERSION} 的内容"
           fi
 
+          CURRENT_HEADER=$(grep -m1 -E "$VERSION_HEADER_RE" docs/CHANGELOG.md || true)
+          if echo "$CURRENT_HEADER" | grep -Eiq '(测试预览版|预览版|preview|pre-release|prerelease|alpha|beta|rc)'; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+
           echo "Extracted changelog for v${VERSION}:"
           echo "$CHANGELOG"
+          echo "Prerelease: $PRERELEASE"
 
           {
             echo "CHANGELOG<<EOF"
             echo "$CHANGELOG"
             echo "EOF"
+            echo "PRERELEASE=$PRERELEASE"
           } >> $GITHUB_OUTPUT
 
       - name: Create Release
@@ -168,5 +178,6 @@ jobs:
             dist/*.exe
             dist/SHA256SUMS
           draft: false
+          prerelease: ${{ steps.changelog.outputs.PRERELEASE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

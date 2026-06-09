@@ -61,7 +61,7 @@ class SimulatorLauncherTests(unittest.TestCase):
         self.assertIn("--theme", command)
         self.assertIn("dark", command)
 
-    def test_build_environment_adds_app_and_ffmpeg_sdk_paths(self):
+    def test_build_environment_adds_app_path_without_ffmpeg_sdk(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             app_dir = Path(temp_dir)
             sdk_bin = app_dir / "ffmpeg-sdk" / "bin"
@@ -70,8 +70,8 @@ class SimulatorLauncherTests(unittest.TestCase):
 
             env = launcher.build_environment()
 
-        self.assertTrue(env["PATH"].startswith(str(sdk_bin)))
-        self.assertIn(str(app_dir), env["PATH"])
+        self.assertTrue(env["PATH"].startswith(str(app_dir)))
+        self.assertNotIn(str(sdk_bin), env["PATH"])
 
     def test_build_ipc_command_enables_stdio(self):
         launcher = SimulatorLauncher("app")

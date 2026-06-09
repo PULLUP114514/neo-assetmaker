@@ -64,7 +64,7 @@ Arknights Pass Material Toolbox — 用于制作明日方舟电子通行证 2.1 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/)（包管理器）
 - Rust 工具链（仅编译模拟器时需要）
-- 若需本地编译 `simulator/`，还需要可用的 FFmpeg 开发依赖发现环境（`pkg-config` 或 `vcpkg`）
+- 若需本地编译 `simulator/`，需要可用的 Rust stable 工具链
 
 ## 文档
 
@@ -228,9 +228,9 @@ neo-assetmaker/
 │   ├── widgets/                     # UI 组件
 │   │   ├── config_panel.py          # 高级配置面板
 │   │   ├── basic_config_panel.py    # 基础配置面板
-│   │   ├── video_preview.py         # 视频预览（OpenGL + QLabel 回退）
+│   │   ├── video_preview.py         # 视频预览（mpv 嵌入 + JSON IPC）
 │   │   ├── gl_video_renderer.py     # OpenGL 视频渲染器
-│   │   ├── frame_reader_thread.py   # 后台视频帧读取线程（PyAV）
+│   │   ├── frame_reader_thread.py   # 旧帧读取接口兼容层
 │   │   ├── drop_overlay.py          # 拖放文件导入覆盖层
 │   │   ├── json_preview.py          # JSON 配置预览
 │   │   ├── timeline.py              # 时间轴控制
@@ -301,7 +301,7 @@ build.bat
 
 ### 编译 Rust 模拟器
 
-先确认本机可以解析 FFmpeg 开发依赖（`pkg-config` 或 `vcpkg` 至少其一可用）：
+先确认本机已安装 Rust stable 工具链：
 
 ```bash
 cd simulator && cargo build --release
@@ -314,7 +314,7 @@ GitHub Actions 工作流位于 `.github/workflows/`：
 - **build.yml** — push/PR 时触发 CI，并调用 `build-app.yml` 完成 Rust 编译、Python 打包和 Inno Setup 安装包构建
 - **release.yml** — `docs/CHANGELOG.md` 顶部版本号变更时自动创建 GitHub Release，并默认启用 PyArmor 混淆构建
 
-构建环境：Windows Latest, Python 3.11, uv, Rust stable, FFmpeg, Inno Setup
+构建环境：Windows Latest, Python 3.11, uv, Rust stable, optional media tools, Inno Setup
 
 ## 开发说明
 
@@ -326,9 +326,9 @@ GitHub Actions 工作流位于 `.github/workflows/`：
 | 核心逻辑 | 服务模式、数据类模型 | `core/` |
 | 配置系统 | dataclass + Enum + JSON Schema | `config/` |
 | 扩展模块 | OAuth + PKCE、FIDO2、MTP | `_mext/` |
-| 模拟器 | Rust (egui + FFmpeg) | `simulator/` |
+| 模拟器 | Rust (egui) | `simulator/` |
 | IPC | Windows 命名管道 (JSON) | `simulator/src/ipc/` |
-| 视频处理 | PyAV + OpenGL + OpenCV (Python) + FFmpeg (Rust) | `core/`, `gui/widgets/`, `simulator/` |
+| 视频处理 | mpv + VapourSynth/VSPipe + x264-7mod | `core/`, `gui/widgets/`, `simulator/` |
 | 打包 | cx_Freeze + Inno Setup + 可选 PyArmor 混淆 | `build.py` |
 | 依赖管理 | uv + pyproject.toml | `pyproject.toml` |
 | CI/CD | GitHub Actions | `.github/workflows/` |

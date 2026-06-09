@@ -15,7 +15,7 @@ from gui.widgets.transition_preview import TransitionPreviewWidget
 from gui.widgets.video_preview import VideoPreviewWidget
 from gui.widgets.config_panel import ConfigPanel
 from config.constants import (
-    APP_NAME, APP_VERSION, get_resolution_spec,
+    APP_NAME, APP_VERSION, APP_VERSION_LABEL, get_resolution_spec,
     SUPPORTED_VIDEO_FORMATS, SUPPORTED_IMAGE_FORMATS
 )
 from gui.widgets.drop_overlay import DropOverlayWidget
@@ -140,7 +140,7 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         """设置UI"""
-        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION_LABEL}")
         self.setMinimumSize(1200, 900)  # 增大最小高度，确保内容完全显示
         self.menuBar().setVisible(False)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint |
@@ -1044,7 +1044,7 @@ class MainWindow(QMainWindow):
 
     def _update_title(self):
         """更新窗口标题"""
-        title = f"{APP_NAME} v{APP_VERSION}"
+        title = f"{APP_NAME} v{APP_VERSION_LABEL}"
         if self._project_path:
             title = f"{os.path.basename(self._project_path)} - {title}"
         elif self._temp_dir:
@@ -1469,7 +1469,7 @@ class MainWindow(QMainWindow):
             config_for_simulator = config_path
             if False and self._config.loop.is_image and loop_file:
                 try:
-                    import av
+                    legacy_media_writer = None
                     import cv2
                     import numpy as np
                     temp_video = os.path.join(
@@ -1481,12 +1481,12 @@ class MainWindow(QMainWindow):
                         raise RuntimeError(
                             f"无法读取图片: {resolved_video_path}")
                     frame_bgr = cv2.resize(frame_bgr, (360, 640))
-                    container = av.open(temp_video, mode='w')
-                    stream = container.add_stream('libx264', rate=30)
+                    container = legacy_media_writer.open(temp_video, mode='w')
+                    stream = container.add_stream('h264', rate=30)
                     stream.width, stream.height = 360, 640
                     stream.pix_fmt = 'yuv420p'
                     for _ in range(30):  # 1 秒循环
-                        av_frame = av.VideoFrame.from_ndarray(
+                        av_frame = legacy_media_writer.frame_from_ndarray(
                             cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB),
                             format='rgb24')
                         for packet in stream.encode(av_frame):
@@ -1646,7 +1646,7 @@ class MainWindow(QMainWindow):
                         self, "模拟器错误",
                         f"模拟器异常退出（返回码: {retcode}）\n\n"
                         f"可能原因：\n"
-                        f"• FFmpeg DLL 缺失或版本不匹配\n"
+                        f"• Media toolchain missing or version mismatch\n"
                         f"• 视频文件损坏或格式不支持\n"
                         f"• 配置文件格式错误\n\n"
                         f"路径: {simulator_path}"
@@ -1694,7 +1694,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, f"关于 {APP_NAME}",
             f"<h3>{APP_NAME}</h3>"
-            f"<p>版本: {APP_VERSION}</p>"
+            f"<p>版本: {APP_VERSION_LABEL}</p>"
             f"<p>明日方舟通行证素材制作器</p>"
             f"<p>作者: Rafael_ban & 初微弦音 & 涙不在为你而流</p>"
         )
@@ -2061,7 +2061,7 @@ class MainWindow(QMainWindow):
             sw_specs = [
                 ("系统", "Buildroot 构建，Linux 主线 5.4.77 内核"),
                 ("协议", "完全开源（硬件 / 软件资料）"),
-                ("版本", f"素材制作器 v{APP_VERSION}"),
+                ("版本", f"素材制作器 v{APP_VERSION_LABEL}"),
             ]
             for key, value in sw_specs:
                 row = QHBoxLayout()
@@ -2465,7 +2465,7 @@ class MainWindow(QMainWindow):
             result = QMessageBox.information(
                 self, "发现新版本",
                 f"发现新版本 v{release_info.version}\n\n"
-                f"当前版本: v{APP_VERSION}\n\n"
+                f"当前版本: v{APP_VERSION_LABEL}\n\n"
                 f"是否立即查看更新详情？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
@@ -2924,28 +2924,14 @@ class MainWindow(QMainWindow):
     def _probe_video_metadata(
         self, video_path: str
     ) -> tuple[int, int, int, float]:
-        import av
+        from core.video_processor import VideoProcessor
+        from core.media_tools import MediaToolchain
 
-        container = av.open(video_path)
-        try:
-            stream = container.streams.video[0]
-            fps = float(stream.average_rate) if stream.average_rate else 30.0
-            width = stream.width
-            height = stream.height
-            total_frames = stream.frames
-            if total_frames == 0 and stream.duration and stream.time_base:
-                total_frames = max(
-                    1, int(float(stream.duration * stream.time_base) * fps)
-                )
-            if total_frames == 0 and container.duration is not None:
-                total_frames = max(
-                    1, int((container.duration / av.time_base) * fps)
-                )
-            if total_frames == 0:
-                total_frames = 1
-            return width, height, total_frames, fps
-        finally:
-            container.close()
+        toolchain = MediaToolchain.discover()
+        info = VideoProcessor(toolchain.mpv_path).get_video_info(video_path)
+        if info is None:
+            raise RuntimeError(f"Unable to probe video metadata: {video_path}")
+        return info.width, info.height, max(1, info.total_frames), info.fps or 30.0
 
     def _probe_image_size(self, image_path: str) -> tuple[int, int]:
         import cv2
@@ -3023,9 +3009,11 @@ class MainWindow(QMainWindow):
         }
 
     def _bake_loop_image_for_simulator(self, loop_state: dict) -> tuple[str, dict]:
-        import av
         import cv2
         import numpy as np
+        from core.export_service import VideoExportParams
+        from core.media_pipeline import MediaEncoder, write_vpy_script
+        from core.media_tools import MediaToolchain
 
         image_path = loop_state["path"]
         img_data = np.fromfile(image_path, dtype=np.uint8)
@@ -3057,23 +3045,37 @@ class MainWindow(QMainWindow):
             1, int(loop_state.get("total_frames", stream_fps) or stream_fps)
         )
 
+        temp_image = os.path.join(self._base_dir, "_sim_temp_source.png")
+        temp_script = os.path.join(self._base_dir, "_sim_temp.vpy")
         temp_video = os.path.join(self._base_dir, "_sim_temp.mp4")
-        container = av.open(temp_video, mode="w")
-        try:
-            stream = container.add_stream("libx264", rate=stream_fps)
-            stream.width = target_w
-            stream.height = target_h
-            stream.pix_fmt = "yuv420p"
+        success, encoded = cv2.imencode(".png", baked_frame)
+        if not success:
+            raise RuntimeError("Unable to encode simulator preview image")
+        with open(temp_image, "wb") as fh:
+            fh.write(encoded.tobytes())
 
-            rgb_frame = cv2.cvtColor(baked_frame, cv2.COLOR_BGR2RGB)
-            for _ in range(total_frames):
-                av_frame = av.VideoFrame.from_ndarray(rgb_frame, format="rgb24")
-                for packet in stream.encode(av_frame):
-                    container.mux(packet)
-            for packet in stream.encode():
-                container.mux(packet)
+        resolution = self._config.screen.value if self._config else "360x640"
+        params = VideoExportParams(
+            video_path=temp_image,
+            cropbox=(0, 0, target_w, target_h),
+            start_frame=0,
+            end_frame=total_frames,
+            fps=float(stream_fps),
+            resolution=resolution,
+            is_image=True,
+            rotation=0,
+        )
+        write_vpy_script(temp_script, params)
+        try:
+            MediaEncoder(MediaToolchain.discover()).encode_vpy_to_mp4(
+                temp_script,
+                temp_video,
+                float(stream_fps),
+            )
         finally:
-            container.close()
+            for temp_path in (temp_script, temp_image):
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
 
         temp_config = self._config.copy()
         temp_config.loop.file = os.path.basename(temp_video)

@@ -1,5 +1,15 @@
 # 更新日志
 
+### v2.1.5（测试预览版）
+
+**媒体链路预览重构**
+- 运行时移除 PyAV、Rust `ffmpeg-next`、FFmpeg SDK DLL、`ffmpeg.exe` 和 `ffprobe` 打包依赖。
+- 客户端视频预览和媒体元数据探测统一改为嵌入式 `mpv`，通过 JSON IPC 控制播放、暂停、跳帧、旋转并读取宽高、时长、帧率等属性。
+- 导出链路改为 `VSPipe -> x264-7mod -> MP4`，继续输出 `loop.mp4` / `intro.mp4`，EPConfig 文件格式不变。
+- x264-7mod 无法直出 MP4 时自动回退到 raw `.264` + MP4Box / lsmash-muxer 封装，并使用导出 FPS 保持时间轴一致。
+- 构建脚本和 GitHub Actions 改为发现并打包 `mpv.exe`、`VSPipe.exe`、`x264-7mod.exe`、`mp4box.exe`、`lsmash-muxer.exe` 或 `muxer.exe`。
+- 新增媒体打包、工具发现、mux fallback 和旧媒体栈残留扫描测试。
+
 ### v2.1.4
 
 **素材论坛客户端接入与构建硬化**
