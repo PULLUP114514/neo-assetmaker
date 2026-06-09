@@ -5,6 +5,8 @@ from pathlib import Path
 
 from _mext.core.config import Config
 from _mext.core.constants import API_BASE_URL
+from _mext.services.api_client import ApiClient
+from _mext.services.download_worker import DownloadWorker
 from core.update_service import UpdateCheckWorker
 
 
@@ -141,6 +143,56 @@ class BakedApiConfigTests(unittest.TestCase):
                     config = self.make_config(root)
 
         self.assertEqual(config.api_base_url, API_BASE_URL)
+
+    def test_api_client_does_not_trust_system_proxy_environment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self.make_config(Path(temp_dir))
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "HTTP_PROXY": "http://127.0.0.1:7890",
+                    "HTTPS_PROXY": "http://127.0.0.1:7890",
+                    "ALL_PROXY": "http://127.0.0.1:7890",
+                },
+            ):
+                client = ApiClient(config)
+                try:
+                    self.assertFalse(client._client.trust_env)
+                finally:
+                    client.close()
+
+    def test_download_worker_does_not_trust_system_proxy_environment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = self.make_config(root)
+            api_client = ApiClient(config)
+            worker = DownloadWorker(
+                task_id="test",
+                url=f"{API_BASE_URL}/files/example.zip",
+                temp_path=root / "downloads" / "example.zip.tmp",
+                final_path=root / "downloads" / "example.zip",
+                api_client=api_client,
+            )
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "HTTP_PROXY": "http://127.0.0.1:7890",
+                    "HTTPS_PROXY": "http://127.0.0.1:7890",
+                    "ALL_PROXY": "http://127.0.0.1:7890",
+                },
+            ):
+                with patch("httpx.Client") as client_cls:
+                    client_cls.return_value.__enter__.side_effect = RuntimeError(
+                        "stop before request"
+                    )
+
+                    with self.assertRaisesRegex(RuntimeError, "stop before request"):
+                        worker._execute_download()
+
+            api_client.close()
+            client_cls.assert_called_once_with(follow_redirects=True, trust_env=False)
 
 
 if __name__ == "__main__":

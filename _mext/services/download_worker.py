@@ -156,7 +156,7 @@ class DownloadWorker(QRunnable):
 
         mode = "ab" if self._resume_offset > 0 else "wb"
 
-        with httpx.Client(follow_redirects=True) as http_client:
+        with httpx.Client(follow_redirects=True, trust_env=False) as http_client:
             with http_client.stream(
                 "GET",
                 self.url,

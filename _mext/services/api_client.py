@@ -66,6 +66,7 @@ class ApiClient:
                 pool=10.0,
             ),
             follow_redirects=True,
+            trust_env=False,
             headers={
                 "User-Agent": "AssetStore/1.0",
                 "Accept": "application/json",
