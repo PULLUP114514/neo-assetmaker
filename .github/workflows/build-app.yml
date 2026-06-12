@@ -128,12 +128,31 @@ jobs:
           uv run --no-sync python -m compileall main.py config core gui utils _mext build.py tests
           uv run --no-sync python -m unittest discover -s tests -p "test_*.py"
 
-      - name: Prepare optional media toolchain directory
+      - name: Download and extract media tools
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "tools/media" | Out-Null
-          Write-Host "Optional media toolchain directory: $((Resolve-Path 'tools/media').Path)"
-          Write-Host "Recognized tools: mpv.exe, VSPipe.exe, x264-7mod.exe, mp4box.exe, lsmash-muxer.exe, muxer.exe"
+          $repo = "${{ github.repository }}"
+          $tag = "media-tools-v1.0"
+          $asset = "media-tools-v1.0.7z"
+          $url = "https://github.com/$repo/releases/download/$tag/$asset"
+
+          Write-Host "Downloading media tools from $url"
+          Invoke-WebRequest -Uri $url -OutFile $asset -MaximumRetryCount 3
+
+          Write-Host "Extracting media tools..."
+          7z x $asset -y
+
+          # Verify critical binaries exist
+          $requiredTools = @("mpv.exe", "VSPipe.exe", "x264-7mod.exe")
+          foreach ($tool in $requiredTools) {
+            $path = "tools/media/$tool"
+            if (-not (Test-Path $path)) {
+              Write-Error "Required tool not found: $path"
+              exit 1
+            }
+            Write-Host "✓ Found: $path"
+          }
+          Write-Host "Media tools extracted successfully"
 
       - name: Install Inno Setup
         shell: pwsh

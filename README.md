@@ -316,6 +316,27 @@ GitHub Actions 工作流位于 `.github/workflows/`：
 
 构建环境：Windows Latest, Python 3.11, uv, Rust stable, optional media tools, Inno Setup
 
+### 媒体工具依赖
+
+应用程序需要以下可选媒体工具用于视频预览和导出：
+
+- **mpv.exe** — 视频预览播放器
+- **VSPipe.exe** — VapourSynth 脚本处理器
+- **x264-7mod.exe** — 视频编码器
+- **mp4box.exe / lsmash-muxer.exe** — MP4 复用器
+
+**CI 构建：** 媒体工具会自动从 GitHub Releases 标签 `media-tools-v1.0` 下载
+
+**本地开发：**
+1. 从 [Releases](https://github.com/rhodesepass/neo-assetmaker/releases/tag/media-tools-v1.0) 下载 `media-tools-v1.0.7z`
+2. 解压到项目根目录（会创建 `tools/media/` 目录）
+3. 验证安装：
+   ```bash
+   uv run python -c "from core.media_tools import MediaToolchain; print(MediaToolchain.discover())"
+   ```
+
+如果不需要视频功能，可以跳过此步骤。应用程序会在需要时提示缺少的工具。
+
 ## 开发说明
 
 ### 技术栈
