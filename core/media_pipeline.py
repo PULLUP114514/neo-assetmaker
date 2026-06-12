@@ -6,12 +6,13 @@ import os
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
 from config.constants import get_resolution_spec
 from core.media_tools import MediaToolchain
-from core.video_processor import X264_PARAMS
+from core.video_processor import X264_CLI_ARGS
 
 
 def build_vspipe_command(vspipe_path: str, script_path: str) -> list[str]:
@@ -39,10 +40,9 @@ def build_x264_command(
         "high",
         "--output-csp",
         "i420",
+        *X264_CLI_ARGS,
         "--output",
         output_path,
-        "--x264-params",
-        X264_PARAMS,
         "-",
     ]
 
@@ -215,6 +215,11 @@ class MediaEncoder:
         missing = self.toolchain.missing_for_export()
         if missing:
             raise RuntimeError("Missing media tools: " + ", ".join(missing))
+        if not self.toolchain.muxer_path:
+            raise RuntimeError(
+                "Missing MP4 muxer: MP4Box or lsmash-muxer is required because "
+                "x264-7mod writes raw H.264 before MP4 packaging"
+            )
 
         output_root, output_ext = os.path.splitext(output_path)
         temp_output = f"{output_root}.tmp{output_ext or '.mp4'}"
@@ -224,33 +229,16 @@ class MediaEncoder:
         if os.path.exists(temp_raw):
             os.remove(temp_raw)
 
-        result = self._run_encode_pipeline(script_path, temp_output, is_cancelled)
-        if result["x264_returncode"] != 0 and _should_retry_with_muxer(result["stderr"]):
-            if not self.toolchain.muxer_path:
-                raise RuntimeError(
-                    "x264-7mod cannot write MP4 directly and no MP4 muxer was found"
-                )
-            if os.path.exists(temp_output):
-                os.remove(temp_output)
-            result = self._run_encode_pipeline(script_path, temp_raw, is_cancelled)
-            if result["vspipe_returncode"] != 0:
-                raise RuntimeError(
-                    f"VSPipe failed with code {result['vspipe_returncode']}"
-                )
-            if result["x264_returncode"] != 0:
-                raise RuntimeError(
-                    "x264-7mod failed while writing raw H.264: "
-                    + result["stderr"][-500:]
-                )
-            self._run_muxer(temp_raw, temp_output, fps)
-        elif result["vspipe_returncode"] != 0:
+        result = self._run_encode_pipeline(script_path, temp_raw, is_cancelled)
+        if result["vspipe_returncode"] != 0:
             raise RuntimeError(f"VSPipe failed with code {result['vspipe_returncode']}")
-        elif result["x264_returncode"] != 0:
+        if result["x264_returncode"] != 0:
             raise RuntimeError(
                 f"x264-7mod failed with code {result['x264_returncode']}: "
                 + result["stderr"][-500:]
             )
 
+        self._run_muxer(temp_raw, temp_output, fps)
         os.replace(temp_output, output_path)
         if os.path.exists(temp_raw):
             os.remove(temp_raw)
@@ -270,18 +258,20 @@ class MediaEncoder:
         if not popen_kwargs["creationflags"]:
             popen_kwargs.pop("creationflags")
 
-        vspipe = subprocess.Popen(vspipe_cmd, stdout=subprocess.PIPE, **popen_kwargs)
-        x264 = subprocess.Popen(
-            x264_cmd,
-            stdin=vspipe.stdout,
-            stdout=subprocess.PIPE,
-            **popen_kwargs,
-        )
+        with _suppress_windows_error_dialogs():
+            vspipe = subprocess.Popen(vspipe_cmd, stdout=subprocess.PIPE, **popen_kwargs)
+            x264 = subprocess.Popen(
+                x264_cmd,
+                stdin=vspipe.stdout,
+                stdout=subprocess.PIPE,
+                **popen_kwargs,
+            )
         if vspipe.stdout is not None:
             vspipe.stdout.close()
         self.active_processes = [vspipe, x264]
 
-        stderr = b""
+        x264_stderr = b""
+        vspipe_stderr = b""
         try:
             while x264.poll() is None:
                 if is_cancelled and is_cancelled():
@@ -290,7 +280,10 @@ class MediaEncoder:
                         os.remove(output_path)
                     raise InterruptedError("Export cancelled")
                 time.sleep(0.1)
-            _stdout, stderr = x264.communicate(timeout=5)
+            _stdout, x264_stderr = x264.communicate(timeout=5)
+            vspipe_stderr_pipe = getattr(vspipe, "stderr", None)
+            if vspipe_stderr_pipe is not None:
+                vspipe_stderr = vspipe_stderr_pipe.read()
             vspipe.wait(timeout=5)
         finally:
             self.terminate_active_processes()
@@ -298,7 +291,10 @@ class MediaEncoder:
         return {
             "vspipe_returncode": int(vspipe.returncode or 0),
             "x264_returncode": int(x264.returncode or 0),
-            "stderr": stderr.decode("utf-8", errors="replace"),
+            "stderr": (
+                x264_stderr.decode("utf-8", errors="replace")
+                + vspipe_stderr.decode("utf-8", errors="replace")
+            ),
         }
 
     def _run_muxer(self, raw_h264_path: str, output_path: str, fps: float) -> None:
@@ -310,23 +306,27 @@ class MediaEncoder:
         }
         if sys.platform == "win32":
             run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        result = subprocess.run(cmd, **run_kwargs)
+        with _suppress_windows_error_dialogs():
+            result = subprocess.run(cmd, **run_kwargs)
         if result.returncode != 0:
             raise RuntimeError(f"MP4 muxer failed: {result.stderr[-500:]}")
 
 
-def _should_retry_with_muxer(stderr: str) -> bool:
-    text = stderr.lower()
-    if "mp4" not in text:
-        return False
-    markers = (
-        "not compiled",
-        "unsupported",
-        "not supported",
-        "could not open output",
-        "can't open output",
+@contextmanager
+def _suppress_windows_error_dialogs():
+    if sys.platform != "win32":
+        yield
+        return
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    old_mode = kernel32.SetErrorMode(
+        0x0001 | 0x0002 | 0x8000
     )
-    return any(marker in text for marker in markers)
+    try:
+        yield
+    finally:
+        kernel32.SetErrorMode(old_mode)
 
 
 __all__ = [

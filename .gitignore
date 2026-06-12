@@ -17,6 +17,8 @@ dist/
 build/
 ArknightsPassMaker/
 .tmp
+.codex_tmp
+tools
 
 # IDE
 .vscode/

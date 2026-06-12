@@ -7,6 +7,7 @@ import os
 import json
 import sys
 import tempfile
+import time
 import uuid
 from typing import Optional, Tuple, TYPE_CHECKING
 
@@ -19,8 +20,16 @@ try:
 except ImportError:
     HAS_CV2 = False
 
-from PyQt6.QtCore import QPoint, QProcess, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QImage, QKeyEvent, QMouseEvent, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QCoreApplication, QPoint, QProcess, QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import (
+    QGuiApplication,
+    QImage,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PyQt6.QtNetwork import QLocalSocket
 from PyQt6.QtWidgets import QLabel, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, setCustomStyleSheet
@@ -188,23 +197,26 @@ class VideoPreviewWidget(QWidget):
         self._has_video = False
 
     def _stop_mpv_process(self):
-        if self._mpv_process is None:
+        process = self._mpv_process
+        if process is None:
             return
+        self._mpv_process = None
         try:
             if self._mpv_socket is not None:
                 self._send_mpv_command(["quit"])
                 self._mpv_socket.disconnectFromServer()
                 self._mpv_socket.deleteLater()
                 self._mpv_socket = None
-            if self._mpv_process.state() != QProcess.ProcessState.NotRunning:
-                self._mpv_process.waitForFinished(1000)
-            if self._mpv_process.state() != QProcess.ProcessState.NotRunning:
-                self._mpv_process.kill()
-                self._mpv_process.waitForFinished(1000)
+            if process.state() != QProcess.ProcessState.NotRunning:
+                process.waitForFinished(3000)
+            if process.state() != QProcess.ProcessState.NotRunning:
+                process.kill()
+                process.waitForFinished(3000)
         except Exception as exc:
             logger.debug("mpv shutdown failed: %s", exc)
         finally:
-            self._mpv_process = None
+            if process.state() == QProcess.ProcessState.NotRunning:
+                process.deleteLater()
 
     def _send_mpv_command(self, command: list):
         if self._mpv_socket is None:
@@ -221,31 +233,58 @@ class VideoPreviewWidget(QWidget):
             return name
         return os.path.join(tempfile.gettempdir(), name)
 
-    def _connect_mpv_ipc(self) -> None:
+    def _connect_mpv_ipc(self) -> bool:
         socket = QLocalSocket(self)
-        for _ in range(30):
+        deadline = time.monotonic() + 10.0
+        attempts = 0
+        last_error = ""
+        while time.monotonic() < deadline:
+            attempts += 1
             socket.connectToServer(self._mpv_ipc_server)
             if socket.waitForConnected(100):
                 self._mpv_socket = socket
-                return
+                logger.debug(
+                    "mpv JSON IPC connected after %d attempts", attempts
+                )
+                return True
+            last_error = socket.errorString()
             socket.abort()
-        logger.warning("mpv JSON IPC connection was not established")
+            QCoreApplication.processEvents()
+            if (
+                self._mpv_process is not None
+                and self._mpv_process.state() == QProcess.ProcessState.NotRunning
+            ):
+                break
+            time.sleep(0.01)
+        logger.warning(
+            "mpv JSON IPC connection was not established after %d attempts: %s",
+            attempts,
+            last_error,
+        )
         socket.deleteLater()
+        return False
 
     def _start_mpv_preview(self, path: str) -> bool:
         self._stop_mpv_process()
         process = QProcess(self)
         self._mpv_ipc_server = self._make_mpv_ipc_server()
+        self._display_stack.setCurrentIndex(self._mpv_page_index)
+        QCoreApplication.processEvents()
+        platform_name = (QGuiApplication.platformName() or "").lower()
+        is_headless = platform_name == "offscreen"
         args = [
             "--no-config",
-            "--force-window=yes",
             "--keep-open=yes",
             "--pause=yes",
             f"--input-ipc-server={self._mpv_ipc_server}",
             "--osc=no",
-            f"--wid={int(self._mpv_widget.winId())}",
-            path,
         ]
+        if is_headless:
+            args.extend(["--force-window=no", "--ao=null", "--vo=null"])
+        else:
+            mpv_window_id = int(self._mpv_widget.winId())
+            args.extend(["--force-window=yes", f"--wid={mpv_window_id}"])
+        args.append(path)
         process.setProgram(self._media_toolchain.mpv_path)
         process.setArguments(args)
         process.start()
@@ -254,8 +293,21 @@ class VideoPreviewWidget(QWidget):
             self.video_label.setText("mpv failed to start")
             return False
         self._mpv_process = process
-        self._connect_mpv_ipc()
-        self._display_stack.setCurrentIndex(self._mpv_page_index)
+        if not self._connect_mpv_ipc():
+            process.waitForFinished(500)
+            stderr = bytes(process.readAllStandardError()).decode(
+                "utf-8", errors="replace"
+            )
+            logger.warning(
+                "mpv JSON IPC connection failed; args=%s exit=%s stderr=%s",
+                args,
+                process.exitCode(),
+                stderr.strip(),
+            )
+            self._display_stack.setCurrentIndex(0)
+            self._stop_mpv_process()
+            self.video_label.setText("mpv JSON IPC connection failed")
+            return False
         if self._rotation:
             self._send_mpv_command(["set_property", "video-rotate", self._rotation])
         return True

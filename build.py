@@ -364,8 +364,21 @@ def _pyarmor_runtime_packages(source_root):
 
 
 def _collect_media_tool_include_files():
-    """Return optional media tools found in the project root or tools/media."""
+    """Return optional media tools and their sibling runtime files."""
     include_files = []
+    if os.path.isdir(MEDIA_TOOL_DIR):
+        for root, dirs, files in os.walk(MEDIA_TOOL_DIR):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for filename in files:
+                if filename.endswith((".pyc", ".pyo")):
+                    continue
+                source_path = os.path.join(root, filename)
+                target_path = os.path.relpath(source_path, ".")
+                include_files.append((source_path, target_path))
+        if include_files:
+            print(f"  Including media tool runtime tree: {MEDIA_TOOL_DIR}")
+            return include_files
+
     for filename, target_path in MEDIA_TOOL_CANDIDATES:
         for source_dir in MEDIA_TOOL_SOURCE_DIRS:
             source_path = os.path.join(source_dir, filename) if source_dir else filename

@@ -33,6 +33,44 @@ X264_PARAMS = (
     ":deblock=1,1:psy-rd=0.4,0"
 )
 
+X264_CLI_ARGS = [
+    "--partitions",
+    "all",
+    "--rc-lookahead",
+    "150",
+    "--bframes",
+    "16",
+    "--b-adapt",
+    "2",
+    "--me",
+    "umh",
+    "--subme",
+    "9",
+    "--merange",
+    "48",
+    "--no-fast-pskip",
+    "--direct",
+    "auto",
+    "--keyint",
+    "300",
+    "--min-keyint",
+    "5",
+    "--ref",
+    "16",
+    "--chroma-qp-offset",
+    "-3",
+    "--aq-mode",
+    "1",
+    "--aq-strength",
+    "0.6",
+    "--trellis",
+    "2",
+    "--deblock",
+    "1:1",
+    "--psy-rd",
+    "0.4:0",
+]
+
 MPV_METADATA_PROPERTIES = (
     "width",
     "height",
@@ -141,41 +179,50 @@ class _MpvMetadataSession:
         self._request_id = 1
 
     def probe(self, input_path: str) -> dict[str, Any]:
-        self.process = QProcess()
-        self.process.setProgram(self.mpv_path)
-        self.process.setArguments(
-            [
-                "--no-config",
-                "--force-window=no",
-                "--idle=no",
-                "--pause=yes",
-                "--keep-open=yes",
-                "--ao=null",
-                "--vo=null",
-                f"--input-ipc-server={self.ipc_server}",
-                input_path,
-            ]
-        )
-        self.process.start()
-        if not self.process.waitForStarted(5000):
-            raise RuntimeError(f"mpv failed to start: {self.process.errorString()}")
+        try:
+            self.process = QProcess()
+            self.process.setProgram(self.mpv_path)
+            self.process.setArguments(
+                [
+                    "--no-config",
+                    "--force-window=no",
+                    "--idle=no",
+                    "--pause=yes",
+                    "--keep-open=yes",
+                    "--ao=null",
+                    "--vo=null",
+                    f"--input-ipc-server={self.ipc_server}",
+                    input_path,
+                ]
+            )
+            self.process.start()
+            if not self.process.waitForStarted(5000):
+                raise RuntimeError(
+                    f"mpv failed to start: {self.process.errorString()}"
+                )
 
-        self.socket = QLocalSocket()
-        self._connect_socket()
-        self._wait_for_file_loaded()
+            self.socket = QLocalSocket()
+            self._connect_socket()
+            self._wait_for_file_loaded()
 
-        properties = {}
-        for name in MPV_METADATA_PROPERTIES:
-            properties[name] = self._get_property(name)
-        return properties
+            properties = {}
+            for name in MPV_METADATA_PROPERTIES:
+                properties[name] = self._get_property(name)
+            return properties
+        finally:
+            self.close()
 
     def _connect_socket(self) -> None:
-        assert self.socket is not None
-        for _ in range(50):
+        time.sleep(0.2)
+        for _ in range(75):
+            if self.socket is None:
+                self.socket = QLocalSocket()
             self.socket.connectToServer(self.ipc_server)
-            if self.socket.waitForConnected(100):
+            if self.socket.waitForConnected(200):
                 return
             self.socket.abort()
+            self.socket.deleteLater()
+            self.socket = None
         raise RuntimeError("mpv JSON IPC connection was not established")
 
     def _wait_for_file_loaded(self) -> None:
@@ -223,8 +270,9 @@ class _MpvMetadataSession:
         except json.JSONDecodeError:
             return None
 
-    def __del__(self) -> None:
-        socket = getattr(self, "socket", None)
+    def close(self) -> None:
+        socket = self.socket
+        self.socket = None
         if socket is not None:
             try:
                 socket.write(b'{"command":["quit"]}\n')
@@ -232,22 +280,30 @@ class _MpvMetadataSession:
                 socket.disconnectFromServer()
             except Exception:
                 pass
-        process = getattr(self, "process", None)
+
+        process = self.process
+        self.process = None
         if process is not None:
             try:
                 if process.state() != QProcess.ProcessState.NotRunning:
                     process.waitForFinished(1000)
                 if process.state() != QProcess.ProcessState.NotRunning:
                     process.kill()
-                    process.waitForFinished(1000)
+                    process.waitForFinished(3000)
             except Exception:
                 pass
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 def _make_mpv_ipc_server() -> str:
     name = f"neo_assetmaker_probe_{os.getpid()}_{uuid.uuid4().hex}"
     if sys.platform == "win32":
-        return name
+        return rf"\\.\pipe\{name}"
     return os.path.join(tempfile.gettempdir(), name)
 
 

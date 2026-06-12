@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QMenuBar, QMenu, QStatusBar,
     QFileDialog, QMessageBox, QLabel, QScrollArea,
     QCheckBox, QComboBox, QDoubleSpinBox,
-    QSpinBox, QLineEdit, QTabWidget, QDialog
+    QSpinBox, QLineEdit, QTabWidget, QDialog, QApplication
 )
 from PyQt6.QtCore import Qt, QSettings, QTimer
 import os
@@ -79,6 +79,9 @@ class MainWindow(QMainWindow):
 
         self._error_handler = ErrorHandler()
         self._error_handler.error_occurred.connect(self._on_error_occurred)
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._shutdown_runtime_resources)
 
         self._undo_stack = []
         self._redo_stack = []
@@ -3807,19 +3810,44 @@ class MainWindow(QMainWindow):
             self._save_settings()
             self._cleanup_temp_dir()
 
-            self._auto_save_service.stop()
-
-            if hasattr(self, '_forum_plugin_handle'):
-                self._forum_plugin_handle.shutdown()
-            elif hasattr(self, '_forum_widget'):
-                self._forum_widget.shutdown()
-
-            if hasattr(self, '_remote_page'):
-                self._remote_page.shutdown()
+            self._shutdown_runtime_resources()
 
             event.accept()
         else:
             event.ignore()
+
+    def _shutdown_runtime_resources(self):
+        """Stop media previews and auxiliary pages during close or app quit."""
+        try:
+            self._auto_save_service.stop()
+        except Exception as exc:
+            logger.debug("auto-save shutdown failed: %s", exc)
+
+        for preview in (
+            getattr(self, "video_preview", None),
+            getattr(self, "intro_preview", None),
+            getattr(self, "frame_capture_preview", None),
+        ):
+            if preview is None:
+                continue
+            try:
+                preview.clear()
+            except Exception as exc:
+                logger.debug("preview shutdown failed: %s", exc)
+
+        try:
+            if hasattr(self, '_forum_plugin_handle'):
+                self._forum_plugin_handle.shutdown()
+            elif hasattr(self, '_forum_widget'):
+                self._forum_widget.shutdown()
+        except Exception as exc:
+            logger.debug("forum shutdown failed: %s", exc)
+
+        try:
+            if hasattr(self, '_remote_page'):
+                self._remote_page.shutdown()
+        except Exception as exc:
+            logger.debug("remote page shutdown failed: %s", exc)
 
     def _on_maximize(self):
         """最大化/还原窗口"""

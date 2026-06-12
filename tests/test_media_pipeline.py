@@ -41,6 +41,8 @@ class MediaToolchainTests(unittest.TestCase):
         self.assertIn("y4m", x264)
         self.assertIn("--output", x264)
         self.assertIn("out.mp4", x264)
+        self.assertIn("--partitions", x264)
+        self.assertNotIn("--x264-params", x264)
         self.assertEqual(x264[-1], "-")
         self.assertNotIn("ffmpeg", " ".join(vspipe + x264).lower())
 
@@ -57,6 +59,17 @@ class MediaToolchainTests(unittest.TestCase):
             toolchain = MediaToolchain.discover(root)
 
         self.assertEqual(Path(toolchain.muxer_path).name, "lsmash-muxer.exe")
+
+    def test_export_requires_external_mp4_muxer(self):
+        from core.media_tools import MediaToolchain
+
+        toolchain = MediaToolchain(
+            mpv_path="mpv.exe",
+            vspipe_path="VSPipe.exe",
+            x264_path="x264-7mod.exe",
+        )
+
+        self.assertEqual(["MP4Box or lsmash-muxer"], toolchain.missing_for_export())
 
     def test_muxer_commands_preserve_raw_stream_fps(self):
         from core.media_pipeline import (
@@ -153,7 +166,7 @@ class EncoderRunTests(unittest.TestCase):
 
         self.assertEqual(encoder.active_processes, [])
 
-    def test_encoder_falls_back_to_external_muxer_when_x264_cannot_write_mp4(self):
+    def test_encoder_uses_external_muxer_without_trying_x264_mp4_output(self):
         from core.media_pipeline import MediaEncoder, MediaToolchain
 
         class FakePipe:
@@ -173,10 +186,8 @@ class EncoderRunTests(unittest.TestCase):
                 if cmd[0] == "x264-7mod.exe":
                     output_path = cmd[cmd.index("--output") + 1]
                     if output_path.endswith(".mp4"):
-                        self.returncode = 1
-                        self.stderr_bytes = b"not compiled with MP4 output support"
-                    else:
-                        Path(output_path).write_bytes(b"raw")
+                        raise AssertionError("x264 must not write MP4 directly")
+                    Path(output_path).write_bytes(b"raw")
 
             def poll(self):
                 return self.returncode
@@ -221,8 +232,8 @@ class EncoderRunTests(unittest.TestCase):
             for call in FakePopen.calls
             if call[0] == "x264-7mod.exe"
         ]
-        self.assertTrue(any(path.endswith(".tmp.mp4") for path in x264_outputs))
-        self.assertTrue(any(path.endswith(".tmp.264") for path in x264_outputs))
+        self.assertEqual(1, len(x264_outputs))
+        self.assertTrue(x264_outputs[0].endswith(".tmp.264"))
         self.assertEqual(
             mux_calls[0][0:3],
             ["MP4Box.exe", "-add", str(output_path.with_suffix(".tmp.264")) + ":fps=30"],

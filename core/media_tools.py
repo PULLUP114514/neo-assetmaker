@@ -78,6 +78,8 @@ class MediaToolchain:
             missing.append("VSPipe")
         if not self.x264_path:
             missing.append("x264-7mod")
+        if not self.muxer_path:
+            missing.append("MP4Box or lsmash-muxer")
         return missing
 
     def missing_for_preview(self) -> list[str]:
