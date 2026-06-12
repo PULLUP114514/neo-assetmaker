@@ -325,10 +325,13 @@ GitHub Actions 工作流位于 `.github/workflows/`：
 - **x264-7mod.exe** — 视频编码器
 - **mp4box.exe / lsmash-muxer.exe** — MP4 复用器
 
-**CI 构建：** 媒体工具会自动从 GitHub Releases 标签 `media-tools-v1.0` 下载
+**CI 构建：** 媒体工具通过 GitHub Actions Cache 自动分发
+- 首次运行：手动触发 `.github/workflows/seed-media-tools.yml` 工作流以填充缓存
+- 后续运行：自动从缓存恢复（~0.5 秒下载时间）
+- 缓存每 7 天无活动后过期，活跃仓库会自动续期
 
 **本地开发：**
-1. 从 [Releases](https://github.com/rhodesepass/neo-assetmaker/releases/tag/media-tools-v1.0) 下载 `media-tools-v1.0.7z`
+1. 从 [上游 Releases](https://github.com/rhodesepass/neo-assetmaker/releases/tag/media-tools-v1.0) 下载 `media-tools-v1.0.7z`
 2. 解压到项目根目录（会创建 `tools/media/` 目录）
 3. 验证安装：
    ```bash

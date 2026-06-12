@@ -128,19 +128,25 @@ jobs:
           uv run --no-sync python -m compileall main.py config core gui utils _mext build.py tests
           uv run --no-sync python -m unittest discover -s tests -p "test_*.py"
 
-      - name: Download and extract media tools
+      - name: Restore media tools from cache
+        id: cache-media-tools
+        uses: actions/cache/restore@v4
+        with:
+          path: media-tools-v1.0.7z
+          key: media-tools-v1.0.7z
+          fail-on-cache-miss: true
+
+      - name: Extract media tools
         shell: pwsh
         run: |
-          $repo = "${{ github.repository }}"
-          $tag = "media-tools-v1.0"
-          $asset = "media-tools-v1.0.7z"
-          $url = "https://github.com/$repo/releases/download/$tag/$asset"
+          if (-not (Test-Path "media-tools-v1.0.7z")) {
+            Write-Error "Cache restore failed — media-tools-v1.0.7z not found"
+            Write-Host "Please run the 'Seed Media Tools Cache' workflow manually to populate the cache"
+            exit 1
+          }
 
-          Write-Host "Downloading media tools from $url"
-          Invoke-WebRequest -Uri $url -OutFile $asset -MaximumRetryCount 3
-
-          Write-Host "Extracting media tools..."
-          7z x $asset -y
+          Write-Host "Extracting media tools from cached archive..."
+          7z x media-tools-v1.0.7z -y
 
           # Verify critical binaries exist
           $requiredTools = @("mpv.exe", "VSPipe.exe", "x264-7mod.exe")
@@ -152,7 +158,9 @@ jobs:
             }
             Write-Host "✓ Found: $path"
           }
-          Write-Host "Media tools extracted successfully"
+
+          $totalSize = (Get-ChildItem tools/media -Recurse | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host "Media tools extracted successfully ($($totalSize.ToString('F2')) MB)"
 
       - name: Install Inno Setup
         shell: pwsh
