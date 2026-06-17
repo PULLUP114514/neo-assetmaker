@@ -71,6 +71,29 @@ class MediaToolchainTests(unittest.TestCase):
 
         self.assertEqual(["MP4Box or lsmash-muxer"], toolchain.missing_for_export())
 
+    def test_export_requires_vapoursynth_source_plugins(self):
+        from core import media_tools
+        from core.media_tools import MediaToolchain
+
+        toolchain = MediaToolchain(
+            mpv_path="mpv.exe",
+            vspipe_path="VSPipe.exe",
+            x264_path="x264-7mod.exe",
+            muxer_path="MP4Box.exe",
+        )
+
+        with mock.patch.object(
+            media_tools,
+            "_missing_vapoursynth_plugins",
+            return_value=("VapourSynth plugin lsmas", "VapourSynth plugin imwri"),
+        ):
+            missing = toolchain.missing_for_export()
+
+        self.assertEqual(
+            ["VapourSynth plugin lsmas", "VapourSynth plugin imwri"],
+            missing,
+        )
+
     def test_muxer_commands_preserve_raw_stream_fps(self):
         from core.media_pipeline import (
             build_lsmash_mux_command,
@@ -143,7 +166,8 @@ class VapourSynthScriptTests(unittest.TestCase):
 
         self.assertIn("core.imwri.Read", script)
         self.assertIn("core.std.Loop", script)
-        self.assertIn("length=30", script)
+        self.assertIn("times=30", script)
+        self.assertNotIn("length=30", script)
         self.assertIn("width=480", script)
         self.assertIn("height=854", script)
 
@@ -238,6 +262,51 @@ class EncoderRunTests(unittest.TestCase):
             mux_calls[0][0:3],
             ["MP4Box.exe", "-add", str(output_path.with_suffix(".tmp.264")) + ":fps=30"],
         )
+
+    def test_vspipe_failure_includes_stderr_details(self):
+        from core.media_pipeline import MediaEncoder, MediaToolchain
+
+        class FakePipe:
+            def close(self):
+                pass
+
+            def read(self):
+                return b"Script evaluation failed: missing lsmas plugin"
+
+        class FakePopen:
+            def __init__(self, cmd, **kwargs):
+                self.cmd = cmd
+                self.kwargs = kwargs
+                self.stdout = FakePipe()
+                self.stderr = FakePipe()
+                self.returncode = 1 if cmd[0] == "VSPipe.exe" else 0
+
+            def poll(self):
+                return self.returncode
+
+            def communicate(self, timeout=None):
+                return b"", b""
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+            def terminate(self):
+                pass
+
+            def kill(self):
+                pass
+
+        toolchain = MediaToolchain(
+            mpv_path="mpv.exe",
+            vspipe_path="VSPipe.exe",
+            x264_path="x264-7mod.exe",
+            muxer_path="MP4Box.exe",
+        )
+        encoder = MediaEncoder(toolchain)
+
+        with mock.patch("core.media_pipeline.subprocess.Popen", FakePopen):
+            with self.assertRaisesRegex(RuntimeError, "missing lsmas plugin"):
+                encoder.encode_vpy_to_mp4("script.vpy", "out.mp4", 30.0)
 
 
 class MpvMetadataTests(unittest.TestCase):

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from config.constants import get_resolution_spec
-from core.media_tools import MediaToolchain
+from core.media_tools import MediaToolchain, build_media_subprocess_env
 from core.video_processor import X264_CLI_ARGS
 
 
@@ -130,7 +130,7 @@ def write_vpy_script(script_path: str | os.PathLike[str], params) -> None:
             [
                 f"clip = core.imwri.Read({_quote_vs_string(params.video_path)})",
                 "clip = clip if clip.format.id == vs.RGB24 else core.resize.Bicubic(clip, format=vs.RGB24)",
-                f"clip = core.std.Loop(clip, length={max(1, end_frame - start_frame)})",
+                f"clip = core.std.Loop(clip, times={max(1, end_frame - start_frame)})",
             ]
         )
     else:
@@ -231,7 +231,11 @@ class MediaEncoder:
 
         result = self._run_encode_pipeline(script_path, temp_raw, is_cancelled)
         if result["vspipe_returncode"] != 0:
-            raise RuntimeError(f"VSPipe failed with code {result['vspipe_returncode']}")
+            details = str(result["stderr"])[-1000:].strip()
+            message = f"VSPipe failed with code {result['vspipe_returncode']}"
+            if details:
+                message = f"{message}: {details}"
+            raise RuntimeError(message)
         if result["x264_returncode"] != 0:
             raise RuntimeError(
                 f"x264-7mod failed with code {result['x264_returncode']}: "
@@ -251,8 +255,10 @@ class MediaEncoder:
     ) -> dict[str, object]:
         vspipe_cmd = build_vspipe_command(self.toolchain.vspipe_path, script_path)
         x264_cmd = build_x264_command(self.toolchain.x264_path, output_path)
+        env = build_media_subprocess_env(self.toolchain.vspipe_path)
         popen_kwargs = {
             "stderr": subprocess.PIPE,
+            "env": env,
             "creationflags": subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         }
         if not popen_kwargs["creationflags"]:
@@ -301,6 +307,7 @@ class MediaEncoder:
         cmd = build_mux_command(self.toolchain.muxer_path, raw_h264_path, output_path, fps)
         run_kwargs = {
             "capture_output": True,
+            "env": build_media_subprocess_env(self.toolchain.muxer_path),
             "text": True,
             "timeout": 120,
         }

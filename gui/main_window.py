@@ -3573,6 +3573,7 @@ class MainWindow(QMainWindow):
             loop_state = self._collect_preview_media_state(
                 self.video_preview,
                 self._config.loop.file,
+                default_to_full=True,
             )
             if loop_state:
                 data['loop_video_params'] = VideoExportParams(
