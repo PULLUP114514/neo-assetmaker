@@ -150,11 +150,11 @@ def write_vpy_script(script_path: str | os.PathLike[str], params) -> None:
             lines.append("# Arbitrary-angle rotation is not supported by the bundled VapourSynth v1 script.")
 
         if crop_w > 0 and crop_h > 0:
+            # 使用 CropAbs 函数，参数必须是整数常量（VapourSynth 要求）
             lines.append(
-                "clip = core.std.Crop("
-                f"clip, left={crop_x}, top={crop_y}, "
-                f"right=max(0, clip.width - {crop_x + crop_w}), "
-                f"bottom=max(0, clip.height - {crop_y + crop_h}))"
+                "clip = core.std.CropAbs("
+                f"clip, width={crop_w}, height={crop_h}, "
+                f"left={crop_x}, top={crop_y})"
             )
 
     lines.append(

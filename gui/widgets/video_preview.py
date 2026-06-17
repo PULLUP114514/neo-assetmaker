@@ -36,6 +36,7 @@ from qfluentwidgets import CaptionLabel, setCustomStyleSheet
 
 from core.media_tools import MediaToolchain
 from core.video_processor import VideoProcessor
+from gui.workers.mpv_launch_worker import MpvLaunchWorker
 
 if TYPE_CHECKING:
     from config.epconfig import EPConfig
@@ -116,6 +117,7 @@ class VideoPreviewWidget(QWidget):
         self._mpv_process: Optional[QProcess] = None
         self._mpv_socket: Optional[QLocalSocket] = None
         self._mpv_ipc_server = ""
+        self._mpv_launch_worker: Optional[MpvLaunchWorker] = None  # 新增：Worker 引用
         self._media_toolchain = MediaToolchain.discover()
         self._has_video = False
         self._loop_frame: Optional[np.ndarray] = None
@@ -197,6 +199,14 @@ class VideoPreviewWidget(QWidget):
         self._has_video = False
 
     def _stop_mpv_process(self):
+        # 停止正在运行的 Worker
+        if self._mpv_launch_worker is not None:
+            if self._mpv_launch_worker.isRunning():
+                self._mpv_launch_worker.cleanup()
+                self._mpv_launch_worker.wait(1000)
+            self._mpv_launch_worker.deleteLater()
+            self._mpv_launch_worker = None
+
         process = self._mpv_process
         if process is None:
             return
@@ -233,43 +243,18 @@ class VideoPreviewWidget(QWidget):
             return name
         return os.path.join(tempfile.gettempdir(), name)
 
-    def _connect_mpv_ipc(self) -> bool:
-        socket = QLocalSocket(self)
-        deadline = time.monotonic() + 10.0
-        attempts = 0
-        last_error = ""
-        while time.monotonic() < deadline:
-            attempts += 1
-            socket.connectToServer(self._mpv_ipc_server)
-            if socket.waitForConnected(100):
-                self._mpv_socket = socket
-                logger.debug(
-                    "mpv JSON IPC connected after %d attempts", attempts
-                )
-                return True
-            last_error = socket.errorString()
-            socket.abort()
-            QCoreApplication.processEvents()
-            if (
-                self._mpv_process is not None
-                and self._mpv_process.state() == QProcess.ProcessState.NotRunning
-            ):
-                break
-            time.sleep(0.01)
-        logger.warning(
-            "mpv JSON IPC connection was not established after %d attempts: %s",
-            attempts,
-            last_error,
-        )
-        socket.deleteLater()
-        return False
-
     def _start_mpv_preview(self, path: str) -> bool:
+        """启动 mpv 预览（异步方式，不阻塞 UI）"""
         self._stop_mpv_process()
-        process = QProcess(self)
+
+        # 准备 IPC 服务器名称
         self._mpv_ipc_server = self._make_mpv_ipc_server()
+
+        # 切换到 mpv 页面
         self._display_stack.setCurrentIndex(self._mpv_page_index)
         QCoreApplication.processEvents()
+
+        # 构建 mpv 参数
         platform_name = (QGuiApplication.platformName() or "").lower()
         is_headless = platform_name == "offscreen"
         args = [
@@ -285,32 +270,56 @@ class VideoPreviewWidget(QWidget):
             mpv_window_id = int(self._mpv_widget.winId())
             args.extend(["--force-window=yes", f"--wid={mpv_window_id}"])
         args.append(path)
-        process.setProgram(self._media_toolchain.mpv_path)
-        process.setArguments(args)
-        process.start()
-        if not process.waitForStarted(3000):
-            logger.error("mpv failed to start: %s", process.errorString())
-            self.video_label.setText("mpv failed to start")
-            return False
-        self._mpv_process = process
-        if not self._connect_mpv_ipc():
-            process.waitForFinished(500)
-            stderr = bytes(process.readAllStandardError()).decode(
-                "utf-8", errors="replace"
-            )
-            logger.warning(
-                "mpv JSON IPC connection failed; args=%s exit=%s stderr=%s",
-                args,
-                process.exitCode(),
-                stderr.strip(),
-            )
-            self._display_stack.setCurrentIndex(0)
-            self._stop_mpv_process()
-            self.video_label.setText("mpv JSON IPC connection failed")
-            return False
+
+        # 创建并启动 Worker（在后台线程中启动 mpv）
+        self._mpv_launch_worker = MpvLaunchWorker(
+            self._media_toolchain.mpv_path,
+            args,
+            self._mpv_ipc_server,
+            parent=self
+        )
+        self._mpv_launch_worker.launched.connect(self._on_mpv_launched)
+        self._mpv_launch_worker.failed.connect(self._on_mpv_launch_failed)
+        self._mpv_launch_worker.start()
+
+        # 立即返回 True，实际结果通过信号异步通知
+        # 注意：load_video 的调用者需要适配这个异步行为
+        return True
+
+    def _on_mpv_launched(self):
+        """mpv 成功启动并连接 IPC（Worker 信号回调）"""
+        logger.info("mpv launched successfully via worker")
+
+        # 从 Worker 获取进程和套接字引用
+        if self._mpv_launch_worker:
+            self._mpv_process = self._mpv_launch_worker.process
+            self._mpv_socket = self._mpv_launch_worker.socket
+
+        # 应用旋转设置
         if self._rotation:
             self._send_mpv_command(["set_property", "video-rotate", self._rotation])
-        return True
+
+        # Worker 完成任务，可以清理引用
+        if self._mpv_launch_worker:
+            self._mpv_launch_worker.deleteLater()
+            self._mpv_launch_worker = None
+
+    def _on_mpv_launch_failed(self, error_msg: str):
+        """mpv 启动失败（Worker 信号回调）"""
+        logger.error("mpv launch failed: %s", error_msg)
+
+        # 显示错误信息
+        self._display_stack.setCurrentIndex(0)
+        self.video_label.setText(f"mpv launch failed: {error_msg}")
+
+        # 清理 Worker
+        if self._mpv_launch_worker:
+            self._mpv_launch_worker.cleanup()
+            self._mpv_launch_worker.deleteLater()
+            self._mpv_launch_worker = None
+
+        # 标记加载失败
+        self._has_video = False
 
     def set_target_resolution(self, width: int, height: int):
         if self.target_width == width and self.target_height == height:

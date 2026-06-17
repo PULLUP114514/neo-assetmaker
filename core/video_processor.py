@@ -303,7 +303,7 @@ class _MpvMetadataSession:
 def _make_mpv_ipc_server() -> str:
     name = f"neo_assetmaker_probe_{os.getpid()}_{uuid.uuid4().hex}"
     if sys.platform == "win32":
-        return rf"\\.\pipe\{name}"
+        return name  # Qt QLocalSocket 会自动添加 \\.\pipe\ 前缀
     return os.path.join(tempfile.gettempdir(), name)
 
 
