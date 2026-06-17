@@ -128,24 +128,48 @@ jobs:
           uv run --no-sync python -m compileall main.py config core gui utils _mext build.py tests
           uv run --no-sync python -m unittest discover -s tests -p "test_*.py"
 
-      - name: Restore media tools from cache
+      - name: Cache media tools
+        uses: actions/cache@v4
         id: cache-media-tools
-        uses: actions/cache/restore@v4
         with:
           path: media-tools-v1.0.7z
           key: media-tools-v1.0.7z
-          fail-on-cache-miss: true
+
+      - name: Download media tools on cache miss
+        if: steps.cache-media-tools.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Cache miss — downloading media tools from repository release..."
+          $repo = "${{ github.repository }}"
+          $tag = "media-tools-v1.0"
+          $asset = "media-tools-v1.0.7z"
+          $url = "https://github.com/$repo/releases/download/$tag/$asset"
+
+          Write-Host "Downloading from: $url"
+          try {
+            Invoke-WebRequest -Uri $url -OutFile media-tools-v1.0.7z -MaximumRetryCount 3
+            $fileSize = (Get-Item media-tools-v1.0.7z).Length / 1MB
+            Write-Host "✓ Downloaded successfully: $($fileSize.ToString('F2')) MB"
+          } catch {
+            Write-Error "Failed to download media tools: $_"
+            Write-Host "URL attempted: $url"
+            Write-Host ""
+            Write-Host "请先创建 release 并上传文件："
+            Write-Host "1. 访问 https://github.com/$repo/releases/new"
+            Write-Host "2. Tag: media-tools-v1.0"
+            Write-Host "3. 上传 media-tools-v1.0.7z"
+            exit 1
+          }
 
       - name: Extract media tools
         shell: pwsh
         run: |
           if (-not (Test-Path "media-tools-v1.0.7z")) {
-            Write-Error "Cache restore failed — media-tools-v1.0.7z not found"
-            Write-Host "Please run the 'Seed Media Tools Cache' workflow manually to populate the cache"
+            Write-Error "Archive not found after cache restore/download"
             exit 1
           }
 
-          Write-Host "Extracting media tools from cached archive..."
+          Write-Host "Extracting media tools..."
           7z x media-tools-v1.0.7z -y
 
           # Verify critical binaries exist
