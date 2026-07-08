@@ -2313,7 +2313,6 @@ class MainWindow(QMainWindow):
         self.btn_forum.setChecked(False)
         self.btn_about.setChecked(False)
         self.btn_remote.setChecked(False)
-        self.btn_usbControl.setChecked(True)
         self.btn_usbControl.setChecked(False)
         self.btn_settings.setChecked(True)
 
@@ -2328,7 +2327,8 @@ class MainWindow(QMainWindow):
             self._flasher_widget.setVisible(False)
         if hasattr(self, '_remote_page'):
             self._remote_page.setVisible(False)
-
+        if hasattr(self, '_usbControl_page'):
+            self._usbControl_page.setVisible(False)
         if not hasattr(self, '_settings_page'):
             from gui.widgets.settings_page import SettingsPage
             self._settings_page = SettingsPage(parent=self)
@@ -2692,6 +2692,11 @@ class MainWindow(QMainWindow):
             # Keep RemotePage's in-memory settings synchronized.
             if hasattr(self, '_remote_page'):
                 self._remote_page._settings[setting_name] = value
+
+        elif setting_name.startswith('usb_controler_'):
+            # Keep RemotePage's in-memory settings synchronized.
+            if hasattr(self, '_usbControl_page'):
+                self._usbControl_page._settings[setting_name] = value
 
         elif setting_name == 'auto_save':
             if value:

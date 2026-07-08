@@ -49,8 +49,6 @@ from gui.workers.rndis_http_workers import (
 import usb.core
 import usb.util
 from core.usb_control import UsbResponderClient
-VID = 0x1d6b
-PID = 0x0203
 
 
 class UsbControlPage(QWidget):
@@ -65,6 +63,10 @@ class UsbControlPage(QWidget):
         self._init_ui()
         self._connect_signals()
         self._set_busy(False)
+        self.VID = self._settings.get("usb_controler_vid")
+        self.PID = self._settings.get("usb_controler_pid")
+        self.enable_restart = self._settings.get(
+            'usb_controler_auto_restart_program')
         # self._update_connection_ui("disconnected")
 
     def _init_ui(self):
@@ -168,6 +170,8 @@ class UsbControlPage(QWidget):
         self.btnRestartDrm.clicked.connect(self._on_restart_drm)
 
     def _on_connect(self):
+        self.VID = int(self._settings.get("usb_controler_vid"), 16)
+        self.PID = int(self._settings.get("usb_controler_pid"), 16)
         """连接click"""
         if (self._is_connected == True):
             self._on_disconnect()
@@ -178,7 +182,7 @@ class UsbControlPage(QWidget):
         # 枚举设备
         usbDeviceList = []
         for dev in usb.core.find(find_all=True):
-            if dev.idVendor == VID and dev.idProduct == PID:
+            if dev.idVendor == self.VID and dev.idProduct == self.PID:
                 usbDeviceList.append(dev)
 
         usbNumberCounter = len(usbDeviceList)
@@ -186,8 +190,8 @@ class UsbControlPage(QWidget):
         # 没有设备
         if usbNumberCounter == 0:
             InfoBar.error(
-                "连接失败",
-                "无设备",
+                "连接失败 无设备",
+                f"找不到： VID {hex(self.VID)},PID {hex(self.PID)}",
                 parent=self,
                 position=InfoBarPosition.TOP,
                 duration=6000,
@@ -279,9 +283,6 @@ class UsbControlPage(QWidget):
 
     def load_settings(self, settings: dict):
         self._settings = settings.copy()
-        self._remote_manager.set_device_token(
-            str(self._settings.get("remote_device_token") or "")
-        )
 
     def _update_connection_ui(self, state: str, success_str=None):
         if state == "Connected":
