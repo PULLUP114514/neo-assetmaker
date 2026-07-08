@@ -71,7 +71,8 @@ class AssetListItemWidget(QWidget):
 
         self.name_label = CaptionLabel(asset_data.get("name", "Unnamed asset"))
         self.uuid_label = CaptionLabel(f"UUID: {asset_data.get('uuid', '')}")
-        self.path_label = CaptionLabel(f"路径: {asset_data.get('path', '/assets')}")
+        self.path_label = CaptionLabel(
+            f"路径: {asset_data.get('path', '/assets')}")
 
         text_layout = QVBoxLayout()
         text_layout.setSpacing(3)
@@ -95,7 +96,8 @@ class AssetListItemWidget(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(12)
-        layout.addWidget(self.thumbnail_label, alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.thumbnail_label,
+                         alignment=Qt.AlignmentFlag.AlignTop)
         layout.addLayout(text_layout, stretch=1)
         layout.addLayout(action_layout)
 
@@ -332,9 +334,11 @@ class RemotePage(QWidget):
 
         self._set_busy(True)
         self._update_connection_ui("detecting_adapter")
-        self._connect_worker = RndisConnectWorker(self._remote_manager, parent=self)
+        self._connect_worker = RndisConnectWorker(
+            self._remote_manager, parent=self)
         self._connect_worker.log_message.connect(self._worker_log)
-        self._connect_worker.connect_succeeded.connect(self._on_connect_success)
+        self._connect_worker.connect_succeeded.connect(
+            self._on_connect_success)
         self._connect_worker.connect_failed.connect(self._on_connect_fail)
         self._connect_worker.start()
 

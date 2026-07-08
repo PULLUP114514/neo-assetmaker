@@ -1,8 +1,8 @@
-#超 级 多 的 屎 山 ciallo~ 啊哈哈.....
-#我就是那个大笨蛋....啊哈哈哈....
-#呜呜呜....果然还是被抛弃了嘛....啊哈哈哈....
-#最喜欢弦音姐姐啦~
-#（以上为自动生成的无意义文本，请忽略）
+# 超 级 多 的 屎 山 ciallo~ 啊哈哈.....
+# 我就是那个大笨蛋....啊哈哈哈....
+# 呜呜呜....果然还是被抛弃了嘛....啊哈哈哈....
+# 最喜欢弦音姐姐啦~
+# （以上为自动生成的无意义文本，请忽略）
 """
 主窗口 - 三栏布局
 """
@@ -127,7 +127,6 @@ class MainWindow(QMainWindow):
         logger.info("主窗口初始化完成")
         self._initializing = False  # 初始化完成
 
-
     def _setup_icon(self):
         """设置窗口图标"""
         icon_path = os.path.join(
@@ -176,7 +175,8 @@ class MainWindow(QMainWindow):
         self.header_bar = QWidget()
         self.header_bar.setObjectName("header_bar")
         _header_default_qss = "#header_bar { background-color: rgba(40, 40, 40, 0.7); color: white; border-top-left-radius: 16px; border-top-right-radius: 16px; } #header_bar > QLabel { font-weight: bold; font-size: 16px; }"
-        setCustomStyleSheet(self.header_bar, _header_default_qss, _header_default_qss)
+        setCustomStyleSheet(
+            self.header_bar, _header_default_qss, _header_default_qss)
         header_layout = QHBoxLayout(self.header_bar)
         header_layout.setContentsMargins(20, 8, 20, 8)
         header_layout.setSpacing(24)
@@ -188,7 +188,8 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.logo_label)
 
         title_label = QLabel(APP_NAME)
-        setCustomStyleSheet(title_label, "font-size: 16px; font-weight: bold;", "font-size: 16px; font-weight: bold;")
+        setCustomStyleSheet(title_label, "font-size: 16px; font-weight: bold;",
+                            "font-size: 16px; font-weight: bold;")
         header_layout.addWidget(title_label)
 
         header_layout.addStretch()
@@ -198,20 +199,20 @@ class MainWindow(QMainWindow):
 
         # 窗口控制按钮 — 文本 PushButton，始终在主题色 header 上
         _ctrl_btn_qss = ("PushButton { background-color: transparent; color: white; "
-            "border: none; border-radius: 18px; font-size: 20px; font-weight: bold; "
-            "padding: 0; margin: 0; } "
-            "PushButton:hover { background-color: rgba(255, 255, 255, 76); } "
-            "PushButton:pressed { background-color: rgba(255, 255, 255, 102); }")
+                         "border: none; border-radius: 18px; font-size: 20px; font-weight: bold; "
+                         "padding: 0; margin: 0; } "
+                         "PushButton:hover { background-color: rgba(255, 255, 255, 76); } "
+                         "PushButton:pressed { background-color: rgba(255, 255, 255, 102); }")
         _max_btn_qss = ("PushButton { background-color: transparent; color: white; "
-            "border: none; border-radius: 18px; font-size: 16px; font-weight: bold; "
-            "padding: 0; margin: 0; } "
-            "PushButton:hover { background-color: rgba(255, 255, 255, 76); } "
-            "PushButton:pressed { background-color: rgba(255, 255, 255, 102); }")
+                        "border: none; border-radius: 18px; font-size: 16px; font-weight: bold; "
+                        "padding: 0; margin: 0; } "
+                        "PushButton:hover { background-color: rgba(255, 255, 255, 76); } "
+                        "PushButton:pressed { background-color: rgba(255, 255, 255, 102); }")
         _close_btn_qss = ("PushButton { background-color: transparent; color: white; "
-            "border: none; border-radius: 18px; font-size: 20px; font-weight: bold; "
-            "padding: 0; margin: 0; } "
-            "PushButton:hover { background-color: rgba(255, 0, 0, 102); } "
-            "PushButton:pressed { background-color: rgba(255, 0, 0, 128); }")
+                          "border: none; border-radius: 18px; font-size: 20px; font-weight: bold; "
+                          "padding: 0; margin: 0; } "
+                          "PushButton:hover { background-color: rgba(255, 0, 0, 102); } "
+                          "PushButton:pressed { background-color: rgba(255, 0, 0, 128); }")
 
         self.btn_minimize = PushButton("−")
         self.btn_minimize.setFixedSize(36, 36)
@@ -264,7 +265,8 @@ class MainWindow(QMainWindow):
         self.btn_material.setToolTip("素材制作")
         self.btn_material.setFixedSize(50, 50)
 
-        self.btn_forum = ToolButton(FluentIcon.PEOPLE if hasattr(FluentIcon, 'PEOPLE') else FluentIcon.CHAT, self.sidebar)
+        self.btn_forum = ToolButton(FluentIcon.PEOPLE if hasattr(
+            FluentIcon, 'PEOPLE') else FluentIcon.CHAT, self.sidebar)
         self.btn_forum.setCheckable(True)
         self.btn_forum.setToolTip("素材论坛")
         self.btn_forum.setFixedSize(50, 50)
@@ -279,6 +281,11 @@ class MainWindow(QMainWindow):
         self.btn_remote.setToolTip("远程管理")
         self.btn_remote.setFixedSize(50, 50)
 
+        self.btn_usbControl = ToolButton(FluentIcon.IOT, self.sidebar)
+        self.btn_usbControl.setCheckable(True)
+        self.btn_usbControl.setToolTip("远程管理")
+        self.btn_usbControl.setFixedSize(50, 50)
+
         buttons_container = QWidget()
         buttons_layout = QVBoxLayout(buttons_container)
         buttons_layout.setContentsMargins(0, 20, 0, 0)
@@ -290,6 +297,7 @@ class MainWindow(QMainWindow):
         buttons_layout.addWidget(self.btn_forum)
         buttons_layout.addWidget(self.btn_about)
         buttons_layout.addWidget(self.btn_remote)
+        buttons_layout.addWidget(self.btn_usbControl)
 
         sidebar_layout.addWidget(buttons_container)
         sidebar_layout.addStretch()
@@ -566,11 +574,16 @@ class MainWindow(QMainWindow):
 
     def _setup_shortcuts(self):
         """设置全局快捷键 - 统一注册到 MainWindow 上，不受子面板可见性影响"""
-        QShortcut(QKeySequence.StandardKey.New, self).activated.connect(self._on_new_project)
-        QShortcut(QKeySequence.StandardKey.Open, self).activated.connect(self._on_open_project)
-        QShortcut(QKeySequence.StandardKey.Save, self).activated.connect(self._on_save_project)
-        QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self._on_save_as)
-        QShortcut(QKeySequence.StandardKey.Quit, self).activated.connect(self.close)
+        QShortcut(QKeySequence.StandardKey.New,
+                  self).activated.connect(self._on_new_project)
+        QShortcut(QKeySequence.StandardKey.Open,
+                  self).activated.connect(self._on_open_project)
+        QShortcut(QKeySequence.StandardKey.Save,
+                  self).activated.connect(self._on_save_project)
+        QShortcut(QKeySequence("Ctrl+Shift+S"),
+                  self).activated.connect(self._on_save_as)
+        QShortcut(QKeySequence.StandardKey.Quit,
+                  self).activated.connect(self.close)
 
         self._shortcut_undo = QShortcut(QKeySequence.StandardKey.Undo, self)
         self._shortcut_undo.setEnabled(False)
@@ -579,10 +592,13 @@ class MainWindow(QMainWindow):
         self._shortcut_redo.setEnabled(False)
         self._shortcut_redo.activated.connect(self._on_redo)
 
-        QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(self._on_validate)
-        QShortcut(QKeySequence("Ctrl+E"), self).activated.connect(self._on_export)
+        QShortcut(QKeySequence("Ctrl+T"),
+                  self).activated.connect(self._on_validate)
+        QShortcut(QKeySequence("Ctrl+E"),
+                  self).activated.connect(self._on_export)
 
-        QShortcut(QKeySequence("F1"), self).activated.connect(self._on_shortcuts)
+        QShortcut(QKeySequence("F1"), self).activated.connect(
+            self._on_shortcuts)
 
     def _connect_signals(self):
         """连接信号"""
@@ -615,14 +631,16 @@ class MainWindow(QMainWindow):
             self._on_capture_frame)
         self.advanced_config_panel.transition_image_changed.connect(
             self._on_transition_image_changed)
-        self.advanced_config_panel.remote_upload_requested.connect(self._on_remote_upload)
-        
+        self.advanced_config_panel.remote_upload_requested.connect(
+            self._on_remote_upload)
+
         self.basic_config_panel.config_changed.connect(self._on_config_changed)
         self.basic_config_panel.video_file_selected.connect(
             self._on_video_file_selected)
         self.basic_config_panel.validate_requested.connect(self._on_validate)
         self.basic_config_panel.export_requested.connect(self._on_export)
-        self.basic_config_panel.remote_upload_requested.connect(self._on_remote_upload)
+        self.basic_config_panel.remote_upload_requested.connect(
+            self._on_remote_upload)
         self.btn_save_icon.clicked.connect(self._on_save_captured_icon)
 
         self.transition_preview.transition_crop_changed.connect(
@@ -642,6 +660,7 @@ class MainWindow(QMainWindow):
         self.btn_forum.clicked.connect(self._on_sidebar_forum)
         self.btn_about.clicked.connect(self._on_sidebar_about)
         self.btn_remote.clicked.connect(self._on_sidebar_remote)
+        self.btn_usbControl.clicked.connect(self._on_sidebar_usbControl)
         self.btn_settings.clicked.connect(self._on_sidebar_settings)
 
         self.intro_preview.video_loaded.connect(self._on_intro_video_loaded)
@@ -1169,8 +1188,6 @@ class MainWindow(QMainWindow):
         self._auto_save_service.start(
             self._config, self._project_path, self._base_dir)
 
-
-
     def _load_project(self, path: str):
         """加载指定路径的项目文件（供最近打开和崩溃恢复调用）"""
         if not os.path.exists(path):
@@ -1530,7 +1547,8 @@ class MainWindow(QMainWindow):
                 is_image=self._config.loop.is_image,
             )
             if loop_state is None:
-                resolved_video_path = self._resolve_media_path(self._config.loop.file)
+                resolved_video_path = self._resolve_media_path(
+                    self._config.loop.file)
                 QMessageBox.warning(
                     self, "视频文件不存在",
                     f"模拟器预览需要的视频文件未找到：\n\n"
@@ -1642,7 +1660,7 @@ class MainWindow(QMainWindow):
                     stderr_output = ""
                     try:
                         stderr_output = self._simulator_proc.stderr.read(
-                            ).decode('utf-8', errors='replace')
+                        ).decode('utf-8', errors='replace')
                     except Exception:
                         pass
                     QMessageBox.warning(
@@ -1863,6 +1881,8 @@ class MainWindow(QMainWindow):
         self.btn_forum.setChecked(False)
         self.btn_about.setChecked(False)
         self.btn_remote.setChecked(False)
+        self.btn_usbControl.setChecked(True)
+        self.btn_usbControl.setChecked(False)
         self.btn_settings.setChecked(False)
 
         self._pause_all_videos()
@@ -1876,6 +1896,8 @@ class MainWindow(QMainWindow):
             self._about_widget.setVisible(False)
         if hasattr(self, '_remote_page'):
             self._remote_page.setVisible(False)
+        if hasattr(self, '_usbControl_page'):
+            self._usbControl_page.setVisible(False)
 
         if not hasattr(self, '_flasher_widget'):
             from gui.dialogs.flasher_dialog import FlasherDialog
@@ -1898,6 +1920,8 @@ class MainWindow(QMainWindow):
         self.btn_forum.setChecked(False)
         self.btn_about.setChecked(False)
         self.btn_remote.setChecked(False)
+        self.btn_usbControl.setChecked(True)
+        self.btn_usbControl.setChecked(False)
         self.btn_settings.setChecked(False)
 
         if hasattr(self, '_forum_widget'):
@@ -1910,7 +1934,8 @@ class MainWindow(QMainWindow):
             self._flasher_widget.setVisible(False)
         if hasattr(self, '_remote_page'):
             self._remote_page.setVisible(False)
-
+        if hasattr(self, '_usbControl_page'):
+            self._usbControl_page.setVisible(False)
         self.splitter.setVisible(True)
         self.status_bar.showMessage("素材制作模式")
 
@@ -1923,6 +1948,8 @@ class MainWindow(QMainWindow):
         self.btn_forum.setChecked(True)
         self.btn_about.setChecked(False)
         self.btn_remote.setChecked(False)
+        self.btn_usbControl.setChecked(True)
+        self.btn_usbControl.setChecked(False)
         self.btn_settings.setChecked(False)
 
         self._pause_all_videos()
@@ -1936,7 +1963,8 @@ class MainWindow(QMainWindow):
             self._flasher_widget.setVisible(False)
         if hasattr(self, '_remote_page'):
             self._remote_page.setVisible(False)
-
+        if hasattr(self, '_usbControl_page'):
+            self._usbControl_page.setVisible(False)
         if not hasattr(self, '_forum_widget'):
             try:
                 from gui.plugin_host import (
@@ -1983,6 +2011,8 @@ class MainWindow(QMainWindow):
         self.btn_forum.setChecked(False)
         self.btn_about.setChecked(True)
         self.btn_remote.setChecked(False)
+        self.btn_usbControl.setChecked(True)
+        self.btn_usbControl.setChecked(False)
         self.btn_settings.setChecked(False)
 
         self._pause_all_videos()
@@ -1996,7 +2026,8 @@ class MainWindow(QMainWindow):
             self._flasher_widget.setVisible(False)
         if hasattr(self, '_remote_page'):
             self._remote_page.setVisible(False)
-
+        if hasattr(self, '_usbControl_page'):
+            self._usbControl_page.setVisible(False)
         if not hasattr(self, '_about_widget'):
             self._about_widget = QWidget()
             self._about_widget.setVisible(False)
@@ -2172,7 +2203,8 @@ class MainWindow(QMainWindow):
                 self.basic_config_panel.setVisible(True)
 
                 if self._config:
-                    self.basic_config_panel.set_config(self._config, self._base_dir)
+                    self.basic_config_panel.set_config(
+                        self._config, self._base_dir)
 
                 self.status_bar.showMessage("基础设置模式 - 简化界面")
                 self._show_loop_tab_only()
@@ -2185,7 +2217,8 @@ class MainWindow(QMainWindow):
                 self.basic_config_panel.setVisible(False)
 
                 if self._config:
-                    self.advanced_config_panel.set_config(self._config, self._base_dir)
+                    self.advanced_config_panel.set_config(
+                        self._config, self._base_dir)
 
                 self.status_bar.showMessage("高级设置模式 - 完整界面")
                 self._show_all_tabs()
@@ -2199,6 +2232,7 @@ class MainWindow(QMainWindow):
         self.btn_forum.setChecked(False)
         self.btn_about.setChecked(False)
         self.btn_remote.setChecked(True)
+        self.btn_usbControl.setChecked(False)
         self.btn_settings.setChecked(False)
 
         self._pause_all_videos()
@@ -2212,7 +2246,8 @@ class MainWindow(QMainWindow):
             self._about_widget.setVisible(False)
         if hasattr(self, '_flasher_widget'):
             self._flasher_widget.setVisible(False)
-
+        if hasattr(self, '_usbControl_page'):
+            self._usbControl_page.setVisible(False)
         if not hasattr(self, '_remote_page'):
             from gui.widgets.remote_page import RemotePage
             self._remote_page = RemotePage(parent=self)
@@ -2232,6 +2267,45 @@ class MainWindow(QMainWindow):
         self._remote_page.setVisible(True)
         self.status_bar.showMessage("远程管理模式")
 
+    def _on_sidebar_usbControl(self):
+        """侧边栏：USB控制"""
+        self.btn_firmware.setChecked(False)
+        self.btn_material.setChecked(False)
+        self.btn_forum.setChecked(False)
+        self.btn_about.setChecked(False)
+        self.btn_remote.setChecked(False)
+        self.btn_usbControl.setChecked(True)
+        self.btn_settings.setChecked(False)
+        self._pause_all_videos()
+        if hasattr(self, '_forum_widget'):
+            self._forum_widget.setVisible(False)
+        self.splitter.setVisible(False)
+        if hasattr(self, '_about_widget'):
+            self._about_widget.setVisible(False)
+        if hasattr(self, '_flasher_widget'):
+            self._flasher_widget.setVisible(False)
+        if hasattr(self, '_remote_page'):
+            self._remote_page.setVisible(False)
+        if hasattr(self, '_settings_page'):
+            self._settings_page.setVisible(False)
+        if not hasattr(self, '_usbControl_page'):
+            from gui.widgets.usb_control_page import UsbControlPage
+            self._usbControl_page = UsbControlPage(parent=self)
+            self.content_layout.addWidget(self._usbControl_page)
+            try:
+                import json
+                config_file = os.path.join(self._app_dir, "config",
+                                           "user_settings.json")
+                if os.path.exists(config_file):
+                    with open(config_file, "r", encoding="utf-8") as f:
+                        settings = json.load(f)
+                    self._usbControl_page.load_settings(settings)
+            except Exception:
+                pass
+
+        self._usbControl_page.setVisible(True)
+        self.status_bar.showMessage("USB管理器模式")
+
     def _on_sidebar_settings(self):
         """侧边栏：设置"""
         self.btn_firmware.setChecked(False)
@@ -2239,6 +2313,8 @@ class MainWindow(QMainWindow):
         self.btn_forum.setChecked(False)
         self.btn_about.setChecked(False)
         self.btn_remote.setChecked(False)
+        self.btn_usbControl.setChecked(True)
+        self.btn_usbControl.setChecked(False)
         self.btn_settings.setChecked(True)
 
         self._pause_all_videos()
@@ -2697,7 +2773,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'content_stack'):
             content_light = "#content_stack { background-color: rgba(255, 255, 255, 0.95); }"
             content_dark = "#content_stack { background-color: rgba(30, 30, 30, 0.95); }"
-            setCustomStyleSheet(self.content_stack, content_light, content_dark)
+            setCustomStyleSheet(self.content_stack,
+                                content_light, content_dark)
 
         nav_buttons = [
             'btn_nav_file',
@@ -2708,9 +2785,9 @@ class MainWindow(QMainWindow):
             if hasattr(self, btn_name):
                 btn = getattr(self, btn_name)
                 nav_qss = ("PushButton { background-color: transparent; color: white; "
-                    "border: none; padding: 10px 20px; font-size: 14px; border-radius: 6px; } "
-                    "PushButton:hover { background-color: rgba(255, 255, 255, 0.3); } "
-                    "PushButton:pressed, PushButton:checked { background-color: rgba(255, 255, 255, 0.4); }")
+                           "border: none; padding: 10px 20px; font-size: 14px; border-radius: 6px; } "
+                           "PushButton:hover { background-color: rgba(255, 255, 255, 0.3); } "
+                           "PushButton:pressed, PushButton:checked { background-color: rgba(255, 255, 255, 0.4); }")
                 setCustomStyleSheet(btn, nav_qss, nav_qss)
 
         for btn in [
@@ -2718,6 +2795,7 @@ class MainWindow(QMainWindow):
                 self.btn_material,
                 self.btn_forum,
                 self.btn_about,
+                self.btn_usbControl,
                 self.btn_remote,
                 self.btn_settings]:
             light_qss = (
@@ -2806,7 +2884,8 @@ class MainWindow(QMainWindow):
                 }
             """
 
-            self.setStyleSheet(style % (content_bg, theme_color, theme_color, status_bg, status_color, status_border))
+            self.setStyleSheet(style % (
+                content_bg, theme_color, theme_color, status_bg, status_color, status_border))
             self.update()
 
             logger.info("图片模式样式已应用")
@@ -2989,10 +3068,12 @@ class MainWindow(QMainWindow):
 
         if is_image:
             width, height = self._probe_image_size(resolved_path)
-            total_frames = max(1, int(getattr(preview, "total_frames", 0) or 150))
+            total_frames = max(
+                1, int(getattr(preview, "total_frames", 0) or 150))
             fps = float(getattr(preview, "video_fps", 0) or 30.0)
         else:
-            width, height, total_frames, fps = self._probe_video_metadata(resolved_path)
+            width, height, total_frames, fps = self._probe_video_metadata(
+                resolved_path)
 
         start_frame, end_frame = self._get_trim_bounds(
             preview,
@@ -3043,7 +3124,8 @@ class MainWindow(QMainWindow):
         target_w, target_h = self._get_target_resolution()
         baked_frame = cv2.resize(cropped, (target_w, target_h))
 
-        stream_fps = max(1, int(round(float(loop_state.get("fps", 30.0) or 30.0))))
+        stream_fps = max(
+            1, int(round(float(loop_state.get("fps", 30.0) or 30.0))))
         total_frames = max(
             1, int(loop_state.get("total_frames", stream_fps) or stream_fps)
         )
@@ -3083,7 +3165,8 @@ class MainWindow(QMainWindow):
         temp_config = self._config.copy()
         temp_config.loop.file = os.path.basename(temp_video)
         temp_config.loop.is_image = False
-        temp_config_path = os.path.join(self._base_dir, "_sim_temp_config.json")
+        temp_config_path = os.path.join(
+            self._base_dir, "_sim_temp_config.json")
         temp_config.save_to_file(temp_config_path)
 
         baked_state = dict(loop_state)
@@ -3108,7 +3191,8 @@ class MainWindow(QMainWindow):
                 from gui.widgets.video_preview import VideoPreviewWidget
                 frame = frame.copy()
                 rotation = source_preview.get_rotation()
-                frame = VideoPreviewWidget.apply_rotation_to_frame(frame, rotation)
+                frame = VideoPreviewWidget.apply_rotation_to_frame(
+                    frame, rotation)
                 self.frame_capture_preview.update_static_frame(frame)
                 logger.info(
                     f"更新截取帧编辑页面，帧: {source_preview.current_frame_index}")
