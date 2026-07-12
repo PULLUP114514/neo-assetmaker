@@ -53,6 +53,7 @@ from core.usb_control import UsbResponderClient
 
 class UsbControlPage(QWidget):
     setting_changed = pyqtSignal(str, object)
+    usbDisconnected = pyqtSignal(object)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -139,7 +140,7 @@ class UsbControlPage(QWidget):
         layout.addWidget(line)
 
         self.networkHintLabel = CaptionLabel(
-            "若要使用此功能，请确保：\n1、菜单 -> 设备 -> 版本号 为a2.7以上\n2、菜单 -> 设置 -> USB模式：管理器APP"
+            "若要使用此功能，请确保：\n1、菜单 -> 设备 -> 版本号 a2.7及以上\n2、菜单 -> 设置 -> USB模式：管理器APP"
         )
         self.networkHintLabel.setWordWrap(True)
         layout.addWidget(self.networkHintLabel)
@@ -164,17 +165,21 @@ class UsbControlPage(QWidget):
         layout.addWidget(self.assetDetailList, stretch=1)
 
     def _connect_signals(self):
+        # UI 对象信号
         self.btnConnect.clicked.connect(self._on_connect)
         self.btnRefreshList.clicked.connect(self._on_refresh_list)
         self.btnUploadLocal.clicked.connect(self._on_upload_local)
         self.btnRestartDrm.clicked.connect(self._on_restart_drm)
+
+        # UI操作信号
+        self.usbDisconnected.connect(self._on_disconnect)
 
     def _on_connect(self):
         self.VID = int(self._settings.get("usb_controler_vid"), 16)
         self.PID = int(self._settings.get("usb_controler_pid"), 16)
         """连接click"""
         if (self._is_connected == True):
-            self._on_disconnect()
+            self._on_manually_disconnect()
             return
         self._set_busy(True)
         self._update_connection_ui("Connecting")
@@ -218,7 +223,7 @@ class UsbControlPage(QWidget):
                 False
             )
             if not ok:
-                self._set_busy(False)
+                self._update_connection_ui("Disconnected")
                 return
             index = items.index(item)
             dev = usbDeviceList[index]
@@ -231,20 +236,14 @@ class UsbControlPage(QWidget):
                 bus=dev.bus,
                 address=dev.address,
                 interface=0,
-                timeout_ms=3000
+                timeout_ms=3000,
+                disconnect_callback=self.usbDisconnected.emit
             )
             kv = self.usbRC.hello()
             for k in sorted(kv.keys()):
                 temp_string_builder += f"{k}={kv[k]}\n"
         except Exception as ex:
-            InfoBar.error(
-                "连接失败",
-                str(ex),
-                parent=self,
-                position=InfoBarPosition.TOP,
-                duration=6000,
-            )
-            self._update_connection_ui("Connected")
+            self._on_disconnect(ex)
             return
         InfoBar.success(
             "连接成功",
@@ -256,8 +255,37 @@ class UsbControlPage(QWidget):
         self._update_connection_ui(
             "Connected", f"{dev.bus} / {dev.address} / {hex(dev.idVendor)} / {hex(dev.idProduct)}")
 
-    def _on_disconnect(self):
+    def _on_disconnect(self, error=None):
         '''断开连接'''
+        self.usbRC = None
+        self._update_connection_ui("Disconnected")
+
+        if isinstance(error, usb.core.USBError):
+            title = "USB通信失败"
+            message_builder = f"USB设备通信异常：{error}"
+        elif isinstance(error, TimeoutError):
+            title = "USB通信超时"
+            message_builder = "USB设备响应超时，请稍后重试"
+        elif isinstance(error, RuntimeError):
+            title = "USB协议错误"
+            message_builder = str(error) or "USB协议异常"
+        elif isinstance(error, (FileNotFoundError, OSError)):
+            title = "USB文件操作失败"
+            message_builder = str(error) or "文件操作失败"
+        else:
+            title = "USB操作失败"
+            message_builder = str(error) if error else "设备断开连接"
+
+        InfoBar.error(
+            title,
+            message_builder,
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=6000,
+        )
+
+    def _on_manually_disconnect(self):
+        '''手动断开连接'''
         if (self.usbRC != None):
             try:
                 self.usbRC.close()
@@ -280,6 +308,11 @@ class UsbControlPage(QWidget):
 
     def _on_refresh_list(self):
         '''刷新列表'''
+        if self._is_busy or not self._is_connected:
+            return
+        self._set_busy(True)
+        self.usbRC.hello()
+        self._set_busy(False)
 
     def load_settings(self, settings: dict):
         self._settings = settings.copy()
