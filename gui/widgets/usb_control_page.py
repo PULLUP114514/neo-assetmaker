@@ -6,7 +6,7 @@ import os
 import tempfile
 from urllib.parse import urlsplit
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -38,17 +38,91 @@ from qfluentwidgets import (
 from core.rndis_device_service import DEFAULT_BASE_URL, DEFAULT_DEVICE_HOST
 from core.remote_asset_manager import RemoteAssetManager
 from gui.texts import remote_user_error
-from gui.workers.rndis_http_workers import (
-    HttpDeleteAssetWorker,
-    HttpDownloadAssetWorker,
-    HttpListAssetsWorker,
-    HttpRestartDrmWorker,
-    HttpUploadAssetWorker,
-    RndisConnectWorker,
+from gui.workers.usb_workers import (
+    UsbConnectWorker,
+    UsbDeleteAssetWorker,
+    UsbDownloadAssetWorker,
+    UsbListOperatorsWorker,
+    UsbReloadAssetsWorker,
+    UsbRestartDrmWorker,
+    UsbUploadAssetWorker,
 )
 import usb.core
 import usb.util
 from core.usb_control import UsbResponderClient
+
+
+class UsbAssetListItemWidget(QWidget):
+    """USB remote asset list item with thumbnail and action buttons."""
+
+    def __init__(self, asset_data: dict, parent_page=None):
+        super().__init__()
+        self.asset_data = asset_data
+        self.parent_page = parent_page
+
+        # Thumbnail — try to load the downloaded icon, fall back to placeholder
+        self.thumbnail_label = QLabel()
+        self.thumbnail_label.setFixedSize(64, 64)
+        self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.thumbnail_label.setScaledContents(True)
+        local_icon = asset_data.get("local_icon", "")
+        if local_icon and os.path.isfile(local_icon):
+            pixmap = QPixmap(local_icon)
+            if not pixmap.isNull():
+                self.thumbnail_label.setPixmap(
+                    pixmap.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio,
+                                  Qt.TransformationMode.SmoothTransformation)
+                )
+            else:
+                self.thumbnail_label.setText("素材")
+        else:
+            self.thumbnail_label.setText("素材")
+        self.thumbnail_label.setStyleSheet(
+            "border: 1px solid #ccc; border-radius: 4px; color: #777;"
+        )
+
+        self.name_label = CaptionLabel(asset_data.get("name", "Unnamed"))
+        uuid = asset_data.get("uuid", "")
+        desc = asset_data.get("description", "")
+        info_text = f"UUID: {uuid}" if uuid else ""
+        if desc:
+            info_text += f"\n{desc}" if info_text else desc
+        self.info_label = CaptionLabel(info_text)
+        self.info_label.setWordWrap(True)
+
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(3)
+        text_layout.addWidget(self.name_label)
+        text_layout.addWidget(self.info_label)
+
+        self.btn_delete = PushButton("删除")
+        self.btn_delete.setIcon(FluentIcon.DELETE)
+        self.btn_download = PushButton("下载")
+        self.btn_download.setIcon(FluentIcon.DOWNLOAD)
+
+        action_layout = QVBoxLayout()
+        action_layout.setSpacing(4)
+        action_layout.addWidget(self.btn_delete)
+        action_layout.addWidget(self.btn_download)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(12)
+        layout.addWidget(self.thumbnail_label,
+                         alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(text_layout, stretch=1)
+        layout.addLayout(action_layout)
+
+        self.btn_delete.clicked.connect(
+            lambda: self.parent_page._on_delete_for_asset(self.asset_data)
+        )
+        self.btn_download.clicked.connect(
+            lambda: self.parent_page._on_download_for_asset(self.asset_data)
+        )
+
+    def set_buttons_enabled(self, enabled: bool):
+        self.btn_delete.setEnabled(enabled)
+        self.btn_download.setEnabled(enabled)
 
 
 class UsbControlPage(QWidget):
@@ -61,6 +135,19 @@ class UsbControlPage(QWidget):
         self._settings: dict = {}
         self._is_busy = False
         self._is_connected = False
+
+        # Worker references
+        self._connect_worker = None
+        self._list_worker = None
+        self._upload_worker = None
+        self._download_worker = None
+        self._delete_worker = None
+        self._restart_worker = None
+        self._reload_worker = None
+
+        # Temp directory for operator preview icons
+        self._temp_dir = tempfile.mkdtemp(prefix="usb_op_icons_")
+
         self._init_ui()
         self._connect_signals()
         self._set_busy(False)
@@ -68,7 +155,6 @@ class UsbControlPage(QWidget):
         self.PID = self._settings.get("usb_controler_pid")
         self.enable_restart = self._settings.get(
             'usb_controler_auto_restart_program')
-        # self._update_connection_ui("disconnected")
 
     def _init_ui(self):
         '''初始化UI'''
@@ -174,6 +260,10 @@ class UsbControlPage(QWidget):
         # UI操作信号
         self.usbDisconnected.connect(self._on_disconnect)
 
+    # ------------------------------------------------------------------
+    # Connect / disconnect
+    # ------------------------------------------------------------------
+
     def _on_connect(self):
         self.VID = int(self._settings.get("usb_controler_vid"), 16)
         self.PID = int(self._settings.get("usb_controler_pid"), 16)
@@ -184,7 +274,7 @@ class UsbControlPage(QWidget):
         self._set_busy(True)
         self._update_connection_ui("Connecting")
 
-        # 枚举设备
+        # 枚举设备 (UI线程，通常很快)
         usbDeviceList = []
         for dev in usb.core.find(find_all=True):
             if dev.idVendor == self.VID and dev.idProduct == self.PID:
@@ -228,37 +318,47 @@ class UsbControlPage(QWidget):
             index = items.index(item)
             dev = usbDeviceList[index]
 
+        # 在后台线程中创建 UsbResponderClient 并握手，避免阻塞 UI
+        self._connect_worker = UsbConnectWorker(
+            vid=dev.idVendor,
+            pid=dev.idProduct,
+            bus=dev.bus,
+            address=dev.address,
+            interface=0,
+            timeout_ms=3000,
+            disconnect_callback=self.usbDisconnected.emit,
+            parent=self,
+        )
+        self._connect_worker.connect_succeeded.connect(
+            self._on_connect_success)
+        self._connect_worker.connect_failed.connect(self._on_connect_fail)
+        self._connect_worker.start()
+
+    def _on_connect_success(self, usbRC, kv: dict):
+        """连接成功（回调在 UI 线程）"""
+        self.usbRC = usbRC
         temp_string_builder = ""
-        try:
-            self.usbRC = UsbResponderClient(
-                vid=dev.idVendor,
-                pid=dev.idProduct,
-                bus=dev.bus,
-                address=dev.address,
-                interface=0,
-                timeout_ms=3000,
-                disconnect_callback=self.usbDisconnected.emit
-            )
-            kv = self.usbRC.hello()
-            for k in sorted(kv.keys()):
-                temp_string_builder += f"{k}={kv[k]}\n"
-        except Exception as ex:
-            self._on_disconnect(ex)
-            return
+        for k in sorted(kv.keys()):
+            temp_string_builder += f"{k}={kv[k]}\n"
+
+        # 从 usbRC 中获取设备的 bus/address 信息来显示
         InfoBar.success(
             "连接成功",
-            f"已连接到：Bus {dev.bus}  Address {dev.address}  VID {hex(dev.idVendor)}  PID {hex(dev.idProduct)}\n{temp_string_builder}",
+            f"已连接到设备\n{temp_string_builder}",
             parent=self,
             position=InfoBarPosition.TOP,
             duration=6000,
         )
-        self._update_connection_ui(
-            "Connected", f"{dev.bus} / {dev.address} / {hex(dev.idVendor)} / {hex(dev.idProduct)}")
+        self._update_connection_ui("Connected")
+        self._on_refresh_list()
+
+    def _on_connect_fail(self, error):
+        """连接失败（回调在 UI 线程）"""
+        self._on_disconnect(error)
 
     def _on_disconnect(self, error=None):
         '''断开连接'''
-        self.usbRC = None
-        self._update_connection_ui("Disconnected")
+        need_disconnect = False
 
         if isinstance(error, usb.core.USBError):
             title = "USB通信失败"
@@ -275,7 +375,14 @@ class UsbControlPage(QWidget):
         else:
             title = "USB操作失败"
             message_builder = str(error) if error else "设备断开连接"
-
+            need_disconnect = True
+        if (need_disconnect):
+            try:
+                self.usbRC.close()
+            except:
+                '''ignore'''
+            self.usbRC = None
+            self._update_connection_ui("Disconnected")
         InfoBar.error(
             title,
             message_builder,
@@ -292,27 +399,290 @@ class UsbControlPage(QWidget):
             except Exception as ex:
                 InfoBar.error(
                     "断开失败",
-                    ex,
+                    str(ex),
                     parent=self,
                     position=InfoBarPosition.TOP,
                     duration=6000,
                 )
                 return
+            self.usbRC = None
             self._update_connection_ui("Disconnected")
 
-    def _on_restart_drm(self):
-        '''重启DRM'''
-
-    def _on_upload_local(self):
-        '''本地上传'''
+    # ------------------------------------------------------------------
+    # Refresh asset list
+    # ------------------------------------------------------------------
 
     def _on_refresh_list(self):
-        '''刷新列表'''
+        '''刷新列表 — 通过 epassctl 获取干员信息及预览图标'''
         if self._is_busy or not self._is_connected:
             return
         self._set_busy(True)
-        self.usbRC.hello()
+
+        self._list_worker = UsbListOperatorsWorker(
+            self.usbRC, self._temp_dir, parent=self
+        )
+        self._list_worker.progress_updated.connect(self._on_task_progress)
+        self._list_worker.list_completed.connect(self._on_list_loaded)
+        self._list_worker.list_failed.connect(self._on_list_failed)
+        self._list_worker.start()
+
+    def _on_list_loaded(self, operators: list):
+        """干员列表加载完成"""
+        self.assetDetailList.clear()
+        if not operators:
+            placeholder = QListWidgetItem("设备端暂未返回干员信息。")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.assetDetailList.addItem(placeholder)
+        else:
+            for op in operators:
+                widget = UsbAssetListItemWidget(op, parent_page=self)
+                list_item = QListWidgetItem(self.assetDetailList)
+                list_item.setSizeHint(widget.sizeHint())
+                self.assetDetailList.addItem(list_item)
+                self.assetDetailList.setItemWidget(list_item, widget)
         self._set_busy(False)
+
+    def _on_list_failed(self, error):
+        """素材列表加载失败"""
+        self._set_busy(False)
+        InfoBar.error(
+            "刷新失败",
+            str(error),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    # ------------------------------------------------------------------
+    # Upload
+    # ------------------------------------------------------------------
+
+    def _on_upload_local(self):
+        '''本地上传'''
+        if self._is_busy or not self._is_connected:
+            return
+        path = QFileDialog.getExistingDirectory(self, "选择素材目录", "")
+        if not path:
+            return
+        self._set_busy(True)
+        self.progressBar.setVisible(True)
+        self.progressBar.setValue(0)
+        self.progressLabel.setText("正在上传...")
+
+        remote_path = "/assets/" + os.path.basename(path)
+        self._upload_worker = UsbUploadAssetWorker(
+            self.usbRC, path, remote_path, parent=self
+        )
+        self._upload_worker.progress_updated.connect(self._on_task_progress)
+        self._upload_worker.upload_completed.connect(self._on_upload_done)
+        self._upload_worker.upload_failed.connect(self._on_upload_failed)
+        self._upload_worker.start()
+
+    def _on_upload_done(self, remote_path: str):
+        """上传完成 → reload_assets → 刷新列表"""
+        self.progressBar.setVisible(False)
+        self.progressLabel.setText("正在重载资产...")
+        InfoBar.success(
+            "上传完成",
+            f"已上传至 {remote_path}",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=4000,
+        )
+        self._reload_assets_and_refresh()
+
+    def _on_upload_failed(self, error):
+        """上传失败"""
+        self.progressBar.setVisible(False)
+        self.progressLabel.setText("")
+        self._set_busy(False)
+        InfoBar.error(
+            "上传失败",
+            str(error),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    def _on_task_progress(self, percent: int, message: str):
+        """更新进度条"""
+        self.progressBar.setVisible(True)
+        self.progressBar.setValue(percent)
+        self.progressLabel.setText(message)
+
+    # ------------------------------------------------------------------
+    # Delete
+    # ------------------------------------------------------------------
+
+    def _on_delete_for_asset(self, asset_data: dict):
+        """删除远程素材"""
+        if self._is_busy or not self._is_connected:
+            return
+        name = asset_data.get("name", "")
+        path = asset_data.get("delete_path") or asset_data.get("path", "")
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            f'删除远程素材"{name}"？\n路径: {path}\n此操作不可撤销。',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._set_busy(True)
+        self._delete_worker = UsbDeleteAssetWorker(
+            self.usbRC, path, parent=self
+        )
+        self._delete_worker.delete_completed.connect(self._on_delete_done)
+        self._delete_worker.delete_failed.connect(self._on_delete_failed)
+        self._delete_worker.start()
+
+    def _on_delete_done(self, path: str):
+        """删除完成 → reload_assets → 刷新列表"""
+        self.progressLabel.setText("正在重载资产...")
+        InfoBar.success(
+            "已删除",
+            f"已删除 {path}",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
+        self._reload_assets_and_refresh()
+
+    def _on_delete_failed(self, error):
+        """删除失败"""
+        self._set_busy(False)
+        InfoBar.error(
+            "删除失败",
+            str(error),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    # ------------------------------------------------------------------
+    # Reload assets (shared by upload & delete)
+    # ------------------------------------------------------------------
+
+    def _reload_assets_and_refresh(self):
+        """执行 reload_assets，完成后刷新列表。保持 busy 状态直到刷新结束。"""
+        self._reload_worker = UsbReloadAssetsWorker(self.usbRC, parent=self)
+        self._reload_worker.reload_succeeded.connect(self._on_reload_done)
+        self._reload_worker.reload_failed.connect(self._on_reload_failed)
+        self._reload_worker.start()
+
+    def _on_reload_done(self):
+        """reload 成功，释放 busy 并刷新列表"""
+        self._set_busy(False)
+        self._on_refresh_list()
+
+    def _on_reload_failed(self, error):
+        """reload 失败，仍然刷新列表（设备可能不支持 reload）"""
+        self._set_busy(False)
+        InfoBar.warning(
+            "重载失败",
+            str(error),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+        self._on_refresh_list()
+
+    # ------------------------------------------------------------------
+    # Download
+    # ------------------------------------------------------------------
+
+    def _on_download_for_asset(self, asset_data: dict):
+        """下载远程素材"""
+        if self._is_busy or not self._is_connected:
+            return
+        name = asset_data.get("name", "")
+        path = asset_data.get("path", "")
+        if not path:
+            return
+        save_dir = QFileDialog.getExistingDirectory(self, "选择保存目录")
+        if not save_dir:
+            return
+        local_path = os.path.join(save_dir, name)
+        self._set_busy(True)
+        self.progressBar.setVisible(True)
+        self.progressBar.setValue(0)
+        self.progressLabel.setText(f"正在下载: {name}")
+        self._download_worker = UsbDownloadAssetWorker(
+            self.usbRC, path, local_path, parent=self
+        )
+        self._download_worker.download_completed.connect(
+            self._on_download_done)
+        self._download_worker.download_failed.connect(self._on_download_failed)
+        self._download_worker.start()
+
+    def _on_download_done(self, local_path: str):
+        """下载完成"""
+        self.progressBar.setVisible(False)
+        self.progressLabel.setText("")
+        self._set_busy(False)
+        InfoBar.success(
+            "下载完成",
+            f"已保存到 {local_path}",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    def _on_download_failed(self, error):
+        """下载失败"""
+        self.progressBar.setVisible(False)
+        self.progressLabel.setText("")
+        self._set_busy(False)
+        InfoBar.error(
+            "下载失败",
+            str(error),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    # ------------------------------------------------------------------
+    # Restart DRM
+    # ------------------------------------------------------------------
+
+    def _on_restart_drm(self):
+        '''重启DRM'''
+        if self._is_busy or not self._is_connected:
+            return
+        self._set_busy(True)
+
+        self._restart_worker = UsbRestartDrmWorker(
+            self.usbRC, parent=self
+        )
+        self._restart_worker.restart_succeeded.connect(self._on_restart_done)
+        self._restart_worker.restart_failed.connect(self._on_restart_failed)
+        self._restart_worker.start()
+
+    def _on_restart_done(self):
+        """重启DRM完成"""
+        self._set_busy(False)
+        InfoBar.success(
+            "已请求重启",
+            "已向设备发送 DrmApp 重启请求。",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
+
+    def _on_restart_failed(self, error):
+        """重启DRM失败"""
+        self._set_busy(False)
+        InfoBar.error(
+            "重启失败",
+            str(error),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    # ------------------------------------------------------------------
+    # Settings & UI helpers
+    # ------------------------------------------------------------------
 
     def load_settings(self, settings: dict):
         self._settings = settings.copy()
@@ -320,11 +690,13 @@ class UsbControlPage(QWidget):
     def _update_connection_ui(self, state: str, success_str=None):
         if state == "Connected":
             self._is_connected = True
-            self.connectionStatusLabel.setText(f"已连接设备：{success_str}")
+            self.connectionStatusLabel.setText(
+                f"已连接设备：{success_str}" if success_str else "已连接设备"
+            )
             self.btnConnect.setText("断开连接")
             self._is_busy = False
         elif state == "Connecting":
-            self.connectionStatusLabel.setText("正在检测 EPass RNDIS 网卡...")
+            self.connectionStatusLabel.setText("正在连接 USB 设备...")
             self.btnConnect.setText("连接中...")
             self._is_busy = True
         elif state == "Disconnected":
@@ -345,3 +717,24 @@ class UsbControlPage(QWidget):
             widget = self.assetDetailList.itemWidget(item)
             if widget:
                 widget.set_buttons_enabled(not busy)
+
+    def shutdown(self):
+        """等待所有后台工作线程结束"""
+        for worker in [
+            self._connect_worker,
+            self._list_worker,
+            self._upload_worker,
+            self._download_worker,
+            self._delete_worker,
+            self._restart_worker,
+            self._reload_worker,
+        ]:
+            if worker and worker.isRunning():
+                worker.wait(3000)
+        # Clean up temp icon directory
+        if self._temp_dir and os.path.isdir(self._temp_dir):
+            try:
+                import shutil
+                shutil.rmtree(self._temp_dir)
+            except Exception:
+                pass

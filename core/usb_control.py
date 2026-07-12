@@ -15,8 +15,6 @@ from PyQt6.QtCore import (QObject, pyqtSignal)
 MAX_PAYLOAD = 8 * 1024 * 1024
 USB_REQUEST_CHUNK = 16 * 1024
 DEFAULT_CHUNK = USB_REQUEST_CHUNK - 4
-VID = 0x1d6b
-PID = 0x0203
 
 
 def _write_exact(ep, data: bytes, timeout: int) -> None:
