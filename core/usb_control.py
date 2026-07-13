@@ -98,9 +98,13 @@ class UsbResponderClient:
     def _send_frame(self, typ: int, payload: bytes = b"", req_id: Optional[int] = None) -> int:
         rid = self._next_id() if req_id is None else req_id
         raw = P.Frame(type=typ, request_id=rid, payload=payload).encode()
-        _write_exact(self._ep_out, raw[: P.HEADER_SIZE], self._timeout)
-        if len(raw) > P.HEADER_SIZE:
-            _write_exact(self._ep_out, raw[P.HEADER_SIZE:], self._timeout)
+        _write_exact(self._ep_out, raw, self._timeout)
+        # 当帧总长为端点最大包大小的整数倍时，需补发零长包(ZLP)通知设备传输结束
+        if len(raw) % self._ep_out.wMaxPacketSize == 0:
+            try:
+                self._ep_out.write(b"", timeout=self._timeout)
+            except Exception:
+                pass
         return rid
 
     def _recv_frame(self) -> P.Frame:
