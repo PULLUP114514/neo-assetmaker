@@ -131,7 +131,7 @@ class UsbAssetListItemWidget(QWidget):
 
 class UsbControlPage(QWidget):
     setting_changed = pyqtSignal(str, object)
-    usbDisconnected = pyqtSignal(object)
+    usb_exception = pyqtSignal(object)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -262,7 +262,7 @@ class UsbControlPage(QWidget):
         self.btnRestartDrm.clicked.connect(self._on_restart_drm)
 
         # UI操作信号
-        self.usbDisconnected.connect(self._on_disconnect)
+        self.usb_exception.connect(self._on_usb_exception)
 
     # ------------------------------------------------------------------
     # Connect / disconnect
@@ -330,7 +330,7 @@ class UsbControlPage(QWidget):
             address=dev.address,
             interface=0,
             timeout_ms=30000,
-            disconnect_callback=self.usbDisconnected.emit,
+            usb_exception_callback=self.usb_exception.emit,
             parent=self,
         )
         self._connect_worker.connect_succeeded.connect(
@@ -358,10 +358,10 @@ class UsbControlPage(QWidget):
 
     def _on_connect_fail(self, error):
         """连接失败（回调在 UI 线程）"""
-        self._on_disconnect(error)
+        self._on_usb_exception(error)
 
-    def _on_disconnect(self, error=None):
-        '''断开连接   （超级无敌霹雳大兜底()()()()）'''
+    def _on_usb_exception(self, error=None):
+        '''异常接收   （超级无敌霹雳大兜底()()()()）'''
         need_disconnect = False
 
         if isinstance(error, usb.core.USBError):
@@ -386,6 +386,8 @@ class UsbControlPage(QWidget):
             except:
                 '''ignore'''
             self.usbRC = None
+            self.assetDetailList.clear()
+            self.middleTitleLabel.setText("远程素材")
             self._update_connection_ui("Disconnected")
         InfoBar.error(
             title,
@@ -410,6 +412,8 @@ class UsbControlPage(QWidget):
                 )
                 return
             self.usbRC = None
+            self.assetDetailList.clear()
+            self.middleTitleLabel.setText("远程素材")
             self._update_connection_ui("Disconnected")
 
     # ------------------------------------------------------------------
@@ -434,10 +438,12 @@ class UsbControlPage(QWidget):
         """干员列表加载完成"""
         self.assetDetailList.clear()
         if not operators:
+            self.middleTitleLabel.setText("远程素材")
             placeholder = QListWidgetItem("设备端暂未返回干员信息。")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self.assetDetailList.addItem(placeholder)
         else:
+            self.middleTitleLabel.setText(f"远程素材（总计：{len(operators)}）")
             for op in operators:
                 widget = UsbAssetListItemWidget(op, parent_page=self)
                 list_item = QListWidgetItem(self.assetDetailList)
@@ -627,13 +633,14 @@ class UsbControlPage(QWidget):
         if self._is_busy or not self._is_connected:
             return
         name = asset_data.get("name", "")
+        uuid = asset_data.get("uuid", "")
         path = asset_data.get("path", "")
-        if not path:
+        if not path or not uuid:
             return
         save_dir = QFileDialog.getExistingDirectory(self, "选择保存目录")
         if not save_dir:
             return
-        local_path = os.path.join(save_dir, name)
+        local_path = os.path.join(save_dir, uuid)
         self._set_busy(True)
         self.progressBar.setVisible(True)
         self.progressBar.setValue(0)
@@ -641,6 +648,7 @@ class UsbControlPage(QWidget):
         self._download_worker = UsbDownloadAssetWorker(
             self.usbRC, path, local_path, parent=self
         )
+        self._download_worker.progress_updated.connect(self._on_task_progress)
         self._download_worker.download_completed.connect(
             self._on_download_done)
         self._download_worker.download_failed.connect(self._on_download_failed)
@@ -739,7 +747,7 @@ class UsbControlPage(QWidget):
 
     def _set_busy(self, busy: bool):
         self._is_busy = busy
-        self.btnConnect.setEnabled(not (busy and self._is_connected))
+        self.btnConnect.setEnabled(not busy)
         self.btnRefreshList.setEnabled(not busy and self._is_connected)
         self.btnUploadLocal.setEnabled(not busy and self._is_connected)
         self.btnRestartDrm.setEnabled(not busy and self._is_connected)

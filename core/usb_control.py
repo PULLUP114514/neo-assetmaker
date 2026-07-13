@@ -11,6 +11,8 @@ import usb.util
 
 import core.protocol as P
 from PyQt6.QtCore import (QObject, pyqtSignal)
+import logging
+logger = logging.getLogger(__name__)
 
 MAX_PAYLOAD = 8 * 1024 * 1024
 USB_REQUEST_CHUNK = 16 * 1024
@@ -186,6 +188,7 @@ class UsbResponderClient:
             raise
 
     def file_get(self, remote_path: str, local_path: str) -> None:
+        logger.info(f"file get: {remote_path} to {local_path}")
         try:
             rid = self._send_frame(
                 P.MSG_FILE_GET, P.encode_kv([("path", remote_path)]))

@@ -28,7 +28,7 @@ class UsbConnectWorker(QThread):
         address: int,
         interface: int = 0,
         timeout_ms: int = 3000,
-        disconnect_callback: Optional[Callable] = None,
+        usb_exception_callback: Optional[Callable] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -38,7 +38,7 @@ class UsbConnectWorker(QThread):
         self._address = address
         self._interface = interface
         self._timeout_ms = timeout_ms
-        self._disconnect_callback = disconnect_callback
+        self._usb_exception_callback = usb_exception_callback
 
     def run(self):
         try:
@@ -49,7 +49,7 @@ class UsbConnectWorker(QThread):
                 address=self._address,
                 interface=self._interface,
                 timeout_ms=self._timeout_ms,
-                disconnect_callback=self._disconnect_callback,
+                disconnect_callback=self._usb_exception_callback,
             )
             kv = usbRC.devinfo()
             self.connect_succeeded.emit(usbRC, kv)
@@ -97,16 +97,30 @@ class UsbListOperatorsWorker(QThread):
         self._usbRC = usbRC
         self._temp_dir = temp_dir
 
+    @staticmethod
+    def _suppress_disconnect(usbRC, func, *args, **kwargs):
+        """执行 func(*args, **kwargs)，期间暂时屏蔽 disconnect_callback。
+
+        刷新列表中 file_get 缺失文件是正常现象（如某目录无 epconfig.json），
+        不应触发 usbDisconnected → 断连整个 USB 会话。
+        """
+        saved = usbRC._disconnect_callback
+        usbRC._disconnect_callback = None
+        try:
+            return func(*args, **kwargs)
+        finally:
+            usbRC._disconnect_callback = saved
+
     def _load_epconfig(self, dirname: str) -> dict:
         """Download and parse /assets/{dirname}/epconfig.json.
 
         Returns the parsed dict on success, or an empty dict on any failure.
         """
-        
         remote = f"/assets/{dirname}/epconfig.json"
         local = os.path.join(self._temp_dir, f"{dirname}_epconfig.json")
         try:
-            self._usbRC.file_get(remote, local)
+            self._suppress_disconnect(
+                self._usbRC, self._usbRC.file_get, remote, local)
             with open(local, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
@@ -116,14 +130,17 @@ class UsbListOperatorsWorker(QThread):
     def _download_icon(self, dirname: str, icon_filename: str, idx: int) -> str:
         """Download icon from /assets/{dirname}/{icon_filename} to temp dir.
 
+        Falls back to /root/res/defaulticon.png when icon_filename is empty.
         Returns the local path on success, or empty string on failure.
         """
-        if not icon_filename:
-            return ""
-        remote = f"/assets/{dirname}/{icon_filename}"
+        if icon_filename:
+            remote = f"/assets/{dirname}/{icon_filename}"
+        else:
+            remote = "/root/res/defaulticon.png"
         local = os.path.join(self._temp_dir, f"op_{idx}_icon.png")
         try:
-            self._usbRC.file_get(remote, local)
+            self._suppress_disconnect(
+                self._usbRC, self._usbRC.file_get, remote, local)
             return local
         except Exception:
             logger.warning("Failed to download icon: %s", remote)
@@ -157,10 +174,12 @@ class UsbListOperatorsWorker(QThread):
                 # epconfig 不存在或无法解析 → 全部用缺省值填充
                 operators.append({
                     "name": F,
+                    "uuid": F,
                     "version": F,
                     "screen": F,
                     "description": f"",
                     "path": f"/assets/{dirname}",
+                    "delete_path": f"/assets/{dirname}",
                     "local_icon": "",
                     "is_dir": False,
                 })
@@ -190,10 +209,12 @@ class UsbListOperatorsWorker(QThread):
 
             operators.append({
                 "name": name,
+                "uuid": uuid,
                 "version": version,
                 "screen": screen,
                 "description": description,
                 "path": f"/assets/{dirname}",
+                "delete_path": f"/assets/{dirname}",
                 "local_icon": local_icon,
                 "is_dir": False,
             })
@@ -263,7 +284,8 @@ class UsbUploadAssetWorker(QThread):
                 ))
 
         # epconfig.json 必须最后上传，避免设备提前开始处理素材
-        entries.sort(key=lambda e: (os.path.basename(e[0]) == "epconfig.json", e[0]))
+        entries.sort(key=lambda e: (
+            os.path.basename(e[0]) == "epconfig.json", e[0]))
 
         total = len(entries)
         if total == 0:
@@ -298,7 +320,7 @@ class UsbUploadAssetWorker(QThread):
 
 
 class UsbDownloadAssetWorker(QThread):
-    """Download a remote file over USB."""
+    """Download a remote directory tree over USB (single file also supported)."""
 
     progress_updated = pyqtSignal(int, str)
     download_completed = pyqtSignal(str)
@@ -313,16 +335,44 @@ class UsbDownloadAssetWorker(QThread):
     ):
         super().__init__(parent)
         self._usbRC = usbRC
-        self._remote_path = remote_path
+        self._remote_path = remote_path.rstrip("/")
         self._local_path = local_path
 
     def run(self):
         try:
-            self._usbRC.file_get(self._remote_path, self._local_path)
+            self._download_tree(self._remote_path, self._local_path)
             self.download_completed.emit(self._local_path)
         except Exception as ex:
             logger.exception("USB download failed")
             self.download_failed.emit(ex)
+
+    def _collect_files(self, remote_dir: str) -> list[tuple[str, str]]:
+        """递归收集远程目录下所有文件，返回 [(remote_path, filename), ...]。
+        子目录被展平 — 所有文件直接归入根目录，不保留子目录层级。
+        """
+        result: list[tuple[str, str]] = []
+        try:
+            files, dirs = self._usbRC.file_list(remote_dir)
+        except Exception:
+            return result
+        for name in files:
+            result.append((f"{remote_dir}/{name}", name))
+        for name in dirs:
+            result.extend(self._collect_files(f"{remote_dir}/{name}"))
+        return result
+
+    def _download_tree(self, remote_dir: str, local_dir: str):
+        """下载远程目录树，所有文件展平到 local_dir。"""
+        os.makedirs(local_dir, exist_ok=True)
+        entries = self._collect_files(remote_dir)
+        if not entries:
+            # 可能是单文件或无文件
+            return
+        total = len(entries)
+        for idx, (remote, filename) in enumerate(entries):
+            pct = int((idx + 1) / total * 100)
+            self.progress_updated.emit(pct, f"下载: {filename}")
+            self._usbRC.file_get(remote, os.path.join(local_dir, filename))
 
 
 class UsbDeleteAssetWorker(QThread):
