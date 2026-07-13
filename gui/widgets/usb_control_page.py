@@ -75,9 +75,9 @@ class UsbAssetListItemWidget(QWidget):
                                   Qt.TransformationMode.SmoothTransformation)
                 )
             else:
-                self.thumbnail_label.setText("素材")
+                self.thumbnail_label.setText("缺省素材")
         else:
-            self.thumbnail_label.setText("素材")
+            self.thumbnail_label.setText("缺省素材")
         self.thumbnail_label.setStyleSheet(
             "border: 1px solid #ccc; border-radius: 4px; color: #777;"
         )
