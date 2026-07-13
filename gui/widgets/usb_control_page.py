@@ -1,6 +1,7 @@
 '''USB管理器页'''
 from __future__ import annotations
 from datetime import datetime
+import json
 import logging
 import os
 import tempfile
@@ -84,9 +85,12 @@ class UsbAssetListItemWidget(QWidget):
         self.name_label = CaptionLabel(asset_data.get("name", "Unnamed"))
         uuid = asset_data.get("uuid", "")
         desc = asset_data.get("description", "")
+        path = asset_data.get("path", "")
         info_text = f"UUID: {uuid}" if uuid else ""
         if desc:
             info_text += f"\n{desc}" if info_text else desc
+        if path:
+            info_text += f"\nPath: {path}" if info_text else path
         self.info_label = CaptionLabel(info_text)
         self.info_label.setWordWrap(True)
 
@@ -325,7 +329,7 @@ class UsbControlPage(QWidget):
             bus=dev.bus,
             address=dev.address,
             interface=0,
-            timeout_ms=3000,
+            timeout_ms=30000,
             disconnect_callback=self.usbDisconnected.emit,
             parent=self,
         )
@@ -357,7 +361,7 @@ class UsbControlPage(QWidget):
         self._on_disconnect(error)
 
     def _on_disconnect(self, error=None):
-        '''断开连接'''
+        '''断开连接   （超级无敌霹雳大兜底()()()()）'''
         need_disconnect = False
 
         if isinstance(error, usb.core.USBError):
@@ -458,18 +462,45 @@ class UsbControlPage(QWidget):
     # ------------------------------------------------------------------
 
     def _on_upload_local(self):
-        '''本地上传'''
+        '''本地上传 — 读取 epconfig.json 获取 uuid，上传到 /assets/{uuid}'''
         if self._is_busy or not self._is_connected:
             return
         path = QFileDialog.getExistingDirectory(self, "选择素材目录", "")
         if not path:
             return
+
+        # 读取 epconfig.json 获取 uuid
+        epconfig_path = os.path.join(path, "epconfig.json")
+        try:
+            with open(epconfig_path, "r", encoding="utf-8") as f:
+                epconfig = json.load(f)
+        except Exception as ex:
+            InfoBar.error(
+                "上传失败",
+                f"无法读取 epconfig.json：{ex}",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+            )
+            return
+
+        uuid = (epconfig.get("uuid") or "").strip()
+        if not uuid:
+            InfoBar.error(
+                "上传失败",
+                "epconfig.json 中缺少 uuid 字段或为空",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+            )
+            return
+
         self._set_busy(True)
         self.progressBar.setVisible(True)
         self.progressBar.setValue(0)
         self.progressLabel.setText("正在上传...")
 
-        remote_path = "/assets/" + os.path.basename(path)
+        remote_path = f"/assets/{uuid}"
         self._upload_worker = UsbUploadAssetWorker(
             self.usbRC, path, remote_path, parent=self
         )
@@ -519,7 +550,7 @@ class UsbControlPage(QWidget):
         if self._is_busy or not self._is_connected:
             return
         name = asset_data.get("name", "")
-        path = asset_data.get("delete_path") or asset_data.get("path", "")
+        path = asset_data.get("path")
         reply = QMessageBox.question(
             self,
             "确认删除",

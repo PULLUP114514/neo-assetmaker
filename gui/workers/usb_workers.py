@@ -79,7 +79,9 @@ class UsbListAssetsWorker(QThread):
 
 
 class UsbListOperatorsWorker(QThread):
-    """Query operator info via epassctl and download preview icons over USB."""
+    """Walk /assets/ subdirectories, parse epconfig.json, and cache preview icons."""
+
+    _FALLBACK = "？？？（不合法缺省值）"
 
     list_completed = pyqtSignal(list)  # list of operator data dicts
     list_failed = pyqtSignal(object)  # exception
@@ -95,88 +97,106 @@ class UsbListOperatorsWorker(QThread):
         self._usbRC = usbRC
         self._temp_dir = temp_dir
 
-    @staticmethod
-    def _extract_json(text: str) -> dict | None:
-        """从混合输出（C 错误前缀 + JSON）中提取并解析 JSON 对象。
+    def _load_epconfig(self, dirname: str) -> dict:
+        """Download and parse /assets/{dirname}/epconfig.json.
 
-        epassctl 失败时 stderr/stdout 可能混入 ANSI 转义序列和 C 源码路径，
-        JSON 位于末尾，以 ``{`` 开始 ``}`` 结束。
+        Returns the parsed dict on success, or an empty dict on any failure.
         """
-        if not text:
-            return None
-        # 找到最后一个 JSON 对象的起始位置
-        start = text.rfind("{")
-        if start == -1:
-            return None
-        end = text.rfind("}")
-        if end == -1 or end <= start:
-            return None
-        json_str = text[start:end + 1]
+        
+        remote = f"/assets/{dirname}/epconfig.json"
+        local = os.path.join(self._temp_dir, f"{dirname}_epconfig.json")
         try:
-            return json.loads(json_str)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return None
+            self._usbRC.file_get(remote, local)
+            with open(local, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            logger.warning("Failed to load epconfig: %s", remote)
+            return {}
+
+    def _download_icon(self, dirname: str, icon_filename: str, idx: int) -> str:
+        """Download icon from /assets/{dirname}/{icon_filename} to temp dir.
+
+        Returns the local path on success, or empty string on failure.
+        """
+        if not icon_filename:
+            return ""
+        remote = f"/assets/{dirname}/{icon_filename}"
+        local = os.path.join(self._temp_dir, f"op_{idx}_icon.png")
+        try:
+            self._usbRC.file_get(remote, local)
+            return local
+        except Exception:
+            logger.warning("Failed to download icon: %s", remote)
+            return ""
 
     def run(self):
+        F = self._FALLBACK
         operators: list = []
-        i = 0
-        while True:
-            try:
-                result = self._usbRC.command_exec(
-                    f"epassctl json prts get_operator_info {i}",
-                    max_stdout=8192,
-                )
-            except Exception:
-                # Exception means no more operators or connection lost
-                break
 
-            if not result.stdout:
-                break
+        # 列出 /assets/ 下所有子目录
+        try:
+            _, dirs = self._usbRC.file_list("/assets")
+        except Exception as ex:
+            logger.exception("USB list /assets failed")
+            self.list_failed.emit(ex)
+            return
 
-            raw = result.stdout.decode("utf-8", errors="replace")
-            info = self._extract_json(raw)
-            if info is None:
-                break
+        total = len(dirs)
 
-            # 请求失败（如索引超出范围）→ 停止迭代
-            if info.get("status") == "error":
-                break
+        # 遍历每个子目录，解析 epconfig.json 并缓存图标
+        for i, dirname in enumerate(dirs):
+            # 跳过非素材目录（如隐藏文件、系统目录）
+            if dirname.startswith("."):
+                continue
 
-            operator_name = info.get("operator_name", f"Operator {i}")
-            self.progress_updated.emit(0, f"加载: {operator_name}")
+            pct = int((i + 1) / max(total, 1) * 100)
+            self.progress_updated.emit(pct, f"加载: {dirname}")
 
-            # 解包ICONPATH
-            icon_path_raw = info.get("icon_path", "")
-            remote_icon = icon_path_raw
-            if remote_icon and remote_icon.startswith("A:"):
-                remote_icon = remote_icon[2:]  # strip "A:" prefix
+            info = self._load_epconfig(dirname)
+            if not info:
+                # epconfig 不存在或无法解析 → 全部用缺省值填充
+                operators.append({
+                    "name": F,
+                    "version": F,
+                    "screen": F,
+                    "description": f"",
+                    "path": f"/assets/{dirname}",
+                    "local_icon": "",
+                    "is_dir": False,
+                })
+                continue
 
-            # 下载ICON
-            local_icon = ""
-            if remote_icon:
-                local_icon = os.path.join(self._temp_dir, f"op_{i}_icon.png")
-                try:
-                    self._usbRC.file_get(remote_icon, local_icon)
-                except Exception:
-                    logger.warning("Failed to download icon: %s", remote_icon)
-                    local_icon = ""  # use placeholder on failure
+            name = info.get("name") or F
+            uuid = info.get("uuid") or F
+            version = info.get("version", F)
+            screen = info.get("screen") or F
+            icon_filename = info.get("icon", "")
 
-            # delete_path: the icon file path on device
-            delete_path = remote_icon
+            # 构建描述文本
+            desc_parts = []
+            if uuid != F:
+                desc_parts.append(f"UUID: {uuid}")
+            if version != F:
+                desc_parts.append(f"版本: {version}")
+            if screen != F:
+                desc_parts.append(f"分辨率: {screen}")
+            description = "  |  ".join(desc_parts) if desc_parts else F
+
+            # 载入图标
+            local_icon = self._download_icon(dirname, icon_filename, i)
+
+            # 远程路径
+            remote_icon = f"/assets/{dirname}/{icon_filename}" if icon_filename else ""
 
             operators.append({
-                "name": operator_name,
-                "uuid": uuid,
-                "description": info.get("description", ""),
-                "path": remote_icon,        # for download button
-                # for delete button (the icon file)
-                "delete_path": delete_path,
-                "local_icon": local_icon,    # local preview thumbnail
-                "operator_index": i,
+                "name": name,
+                "version": version,
+                "screen": screen,
+                "description": description,
+                "path": f"/assets/{dirname}",
+                "local_icon": local_icon,
                 "is_dir": False,
             })
-
-            i += 1
 
         self.list_completed.emit(operators)
 
@@ -217,6 +237,9 @@ class UsbUploadAssetWorker(QThread):
         self._usbRC.file_put(local, remote, chunk_size=self._chunk_size)
 
     def _upload_directory(self):
+        # 确保目标根目录存在（如 /assets/{uuid}）
+        self._usbRC.dir_mkdir(self._remote_path, parents=True)
+
         # Collect all files and directories first so we can report progress
         entries: list[tuple[str, str, bool]] = []  # (local, remote, is_dir)
         local_base = os.path.normpath(self._local_path)
@@ -239,20 +262,39 @@ class UsbUploadAssetWorker(QThread):
                     False,
                 ))
 
+        # epconfig.json 必须最后上传，避免设备提前开始处理素材
+        entries.sort(key=lambda e: (os.path.basename(e[0]) == "epconfig.json", e[0]))
+
         total = len(entries)
         if total == 0:
             return
+
+        failed: list[str] = []
 
         for idx, (local, remote, is_dir) in enumerate(entries):
             pct = int((idx + 1) / total * 100)
             if is_dir:
                 self.progress_updated.emit(pct, f"创建目录: {remote}")
-                self._usbRC.dir_mkdir(remote, parents=True)
+                try:
+                    self._usbRC.dir_mkdir(remote, parents=True)
+                except Exception as ex:
+                    logger.warning("mkdir failed: %s — %s", remote, ex)
+                    failed.append(remote)
             else:
                 self.progress_updated.emit(
                     pct, f"上传: {os.path.basename(local)}")
-                self._usbRC.file_put(
-                    local, remote, chunk_size=self._chunk_size)
+                try:
+                    self._usbRC.file_put(
+                        local, remote, chunk_size=self._chunk_size)
+                except Exception as ex:
+                    logger.warning("upload failed: %s — %s", remote, ex)
+                    failed.append(remote)
+
+        if failed:
+            raise RuntimeError(
+                f"{len(failed)}/{total} 个文件上传失败: {', '.join(failed[:5])}"
+                + ("..." if len(failed) > 5 else "")
+            )
 
 
 class UsbDownloadAssetWorker(QThread):
