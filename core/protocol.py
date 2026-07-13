@@ -58,7 +58,8 @@ class Frame:
 def decode_frame(buf: bytes) -> Frame:
     if len(buf) < HEADER_SIZE:
         raise ValueError("frame too short")
-    magic, ver, typ, flags, req_id, plen, pcrc = struct.unpack("<IHHIIII", buf[:HEADER_SIZE])
+    magic, ver, typ, flags, req_id, plen, pcrc = struct.unpack(
+        "<IHHIIII", buf[:HEADER_SIZE])
     if magic != MAGIC or ver != VERSION:
         raise ValueError("bad magic or version")
     if len(buf) != HEADER_SIZE + plen:
@@ -88,13 +89,13 @@ def decode_kv(data: bytes) -> Dict[str, str]:
     for _ in range(count):
         if off + 4 > len(data):
             raise ValueError("kv truncated")
-        kl, vl = struct.unpack("<HH", data[off : off + 4])
+        kl, vl = struct.unpack("<HH", data[off: off + 4])
         off += 4
         if off + kl + vl > len(data):
             raise ValueError("kv truncated")
-        k = data[off : off + kl].decode("utf-8")
+        k = data[off: off + kl].decode("utf-8")
         off += kl
-        v = data[off : off + vl].decode("utf-8")
+        v = data[off: off + vl].decode("utf-8")
         off += vl
         d[k] = v
     if off != len(data):
@@ -125,12 +126,13 @@ class CommandResult:
 def decode_command_result(data: bytes) -> CommandResult:
     if len(data) < 20:
         raise ValueError("command result too short")
-    exit_code, to, duration_ms, out_len, err_len = struct.unpack("<iB3xIII", data[:20])
+    exit_code, to, duration_ms, out_len, err_len = struct.unpack(
+        "<iB3xIII", data[:20])
     total = 20 + out_len + err_len
     if len(data) != total:
         raise ValueError("command result length mismatch")
-    o = data[20 : 20 + out_len]
-    e = data[20 + out_len :]
+    o = data[20: 20 + out_len]
+    e = data[20 + out_len:]
     return CommandResult(
         exit_code=exit_code,
         timed_out=to != 0,

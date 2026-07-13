@@ -135,7 +135,6 @@ class UsbResponderClient:
         mps = self._ep_in.wMaxPacketSize
         while True:
             chunk = self._ep_in.read(max(size, mps), timeout=self._timeout)
-            logger.info(f"chunk={len(chunk)}")
             if chunk is None or len(chunk) == 0:
                 # ZLP 残留：忽略，继续尝试读下一笔数据
                 continue
@@ -199,7 +198,6 @@ class UsbResponderClient:
             raise
 
     def file_get(self, remote_path: str, local_path: str) -> None:
-        logger.info(f"file get: {remote_path} to {local_path}")
         try:
             rid = self._send_frame(
                 P.MSG_FILE_GET, P.encode_kv([("path", remote_path)]))

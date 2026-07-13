@@ -409,7 +409,7 @@ class UsbRestartDrmWorker(QThread):
     def __init__(
         self,
         usbRC: UsbResponderClient,
-        command: str = "restart_drm",
+        command: str = "epassctl app exit 1",
         parent=None,
     ):
         super().__init__(parent)
