@@ -1,5 +1,3 @@
-# 与 firmware include/usb_responder/protocol.h + src/protocol.c / crc32.c对齐
-
 from __future__ import annotations
 
 import struct
