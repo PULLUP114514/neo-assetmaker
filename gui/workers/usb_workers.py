@@ -193,8 +193,8 @@ class UsbListOperatorsWorker(QThread):
 
             # 构建描述文本
             desc_parts = []
-            if uuid != F:
-                desc_parts.append(f"UUID: {uuid}")
+            # if uuid != F:
+            #     desc_parts.append(f"UUID: {uuid}")
             if version != F:
                 desc_parts.append(f"版本: {version}")
             if screen != F:
