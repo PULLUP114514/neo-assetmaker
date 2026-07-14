@@ -147,8 +147,7 @@ class UsbMaterialPage(QWidget):
 
         # 左子面板：操作按钮
         actionPanel = SimpleCardWidget()
-        actionPanel.setMinimumWidth(180)
-        actionPanel.setMaximumWidth(250)
+        actionPanel.setMinimumWidth(250)
         actionLayout = QVBoxLayout(actionPanel)
         actionLayout.setContentsMargins(15, 15, 15, 15)
         actionLayout.setSpacing(10)
@@ -539,7 +538,8 @@ class UsbMaterialPage(QWidget):
         ctrl.progressLabel.setText("正在强制重载DRM资产...")
 
         self._reload_worker = UsbReloadAssetsWorker(ctrl.usbRC, parent=self)
-        self._reload_worker.reload_succeeded.connect(self._on_force_reload_done)
+        self._reload_worker.reload_succeeded.connect(
+            self._on_force_reload_done)
         self._reload_worker.reload_failed.connect(self._on_force_reload_failed)
         self._reload_worker.start()
 

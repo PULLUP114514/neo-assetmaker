@@ -236,7 +236,7 @@ class UsbControlPage(QWidget):
             duration=6000,
         )
         self._update_connection_ui("Connected")
-        self.subPageWidget.refresh_asset_list()
+        self.subPageWidget.refresh_current_page()
 
     def _on_connect_fail(self, error):
         """连接失败（回调在 UI 线程）"""
@@ -269,6 +269,7 @@ class UsbControlPage(QWidget):
                 '''ignore'''
             self.usbRC = None
             self.subPageWidget.clear_asset_list()
+            self.subPageWidget.clear_app_list()
             self._update_connection_ui("Disconnected")
         InfoBar.error(
             title,
@@ -294,6 +295,7 @@ class UsbControlPage(QWidget):
                 return
             self.usbRC = None
             self.subPageWidget.clear_asset_list()
+            self.subPageWidget.clear_app_list()
             self._update_connection_ui("Disconnected")
 
     # ------------------------------------------------------------------

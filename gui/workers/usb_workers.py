@@ -400,6 +400,141 @@ class UsbDeleteAssetWorker(QThread):
             self.delete_failed.emit(ex)
 
 
+class UsbListAppsWorker(QThread):
+    """Walk /app/ subdirectories, parse appconfig.json, and cache preview icons."""
+
+    _FALLBACK = "？？？（不合法缺省值）"
+
+    list_completed = pyqtSignal(list)  # list of app data dicts
+    list_failed = pyqtSignal(object)  # exception
+    progress_updated = pyqtSignal(int, str)
+
+    def __init__(
+        self,
+        usbRC: UsbResponderClient,
+        temp_dir: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._usbRC = usbRC
+        self._temp_dir = temp_dir
+
+    @staticmethod
+    def _suppress_disconnect(usbRC, func, *args, **kwargs):
+        """Execute func(*args, **kwargs), temporarily suppress disconnect_callback."""
+        saved = usbRC._disconnect_callback
+        usbRC._disconnect_callback = None
+        try:
+            return func(*args, **kwargs)
+        finally:
+            usbRC._disconnect_callback = saved
+
+    def _load_epconfig(self, dirname: str) -> dict:
+        """Download and parse /app/{dirname}/appconfig.json.
+
+        Returns the parsed dict on success, or an empty dict on any failure.
+        """
+        remote = f"/app/{dirname}/appconfig.json"
+        local = os.path.join(self._temp_dir, f"app_{dirname}_appconfig.json")
+        try:
+            self._suppress_disconnect(
+                self._usbRC, self._usbRC.file_get, remote, local)
+            with open(local, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            logger.warning("Failed to load epconfig: %s", remote)
+            return {}
+
+    def _download_icon(self, dirname: str, icon_filename: str, idx: int) -> str:
+        """Download icon from /app/{dirname}/{icon_filename} to temp dir.
+
+        Falls back to /root/res/defaulticon.png when icon_filename is empty.
+        Returns the local path on success, or empty string on failure.
+        """
+        if icon_filename:
+            remote = f"/app/{dirname}/{icon_filename}"
+        else:
+            remote = "/root/res/defaulticon.png"
+        local = os.path.join(self._temp_dir, f"app_{idx}_icon.png")
+        try:
+            self._suppress_disconnect(
+                self._usbRC, self._usbRC.file_get, remote, local)
+            return local
+        except Exception:
+            logger.warning("Failed to download icon: %s", remote)
+            return ""
+
+    def run(self):
+        F = self._FALLBACK
+        apps: list = []
+
+        # List /app/ subdirectories
+        try:
+            _, dirs = self._usbRC.file_list("/app")
+        except Exception as ex:
+            logger.exception("USB list /app failed")
+            self.list_failed.emit(ex)
+            return
+
+        total = len(dirs)
+
+        # Walk each subdirectory, parse appconfig.json and cache icon
+        for i, dirname in enumerate(dirs):
+            # Skip non-app directories (hidden files, system dirs)
+            if dirname.startswith("."):
+                continue
+
+            pct = int((i + 1) / max(total, 1) * 100)
+            self.progress_updated.emit(pct, f"加载: {dirname}")
+
+            info = self._load_epconfig(dirname)
+            if not info:
+                # epconfig not found or unparseable — fill with defaults
+                apps.append({
+                    "name": F,
+                    "uuid": F,
+                    "version": F,
+                    "screen": F,
+                    "description": "",
+                    "path": f"/app/{dirname}",
+                    "delete_path": f"/app/{dirname}",
+                    "local_icon": "",
+                    "is_dir": True,
+                })
+                continue
+
+            name = info.get("name") or F
+            uuid = info.get("uuid") or F
+            version = info.get("version", F)
+            screen = info.get("screen") or F
+            icon_filename = info.get("icon", "")
+
+            # Build description text
+            desc_parts = []
+            if version != F:
+                desc_parts.append(f"版本: {version}")
+            if screen != F:
+                desc_parts.append(f"分辨率: {screen}")
+            description = "  |  ".join(desc_parts) if desc_parts else F
+
+            # Download icon
+            local_icon = self._download_icon(dirname, icon_filename, i)
+
+            apps.append({
+                "name": name,
+                "uuid": uuid,
+                "version": version,
+                "screen": screen,
+                "description": description,
+                "path": f"/app/{dirname}",
+                "delete_path": f"/app/{dirname}",
+                "local_icon": local_icon,
+                "is_dir": True,
+            })
+
+        self.list_completed.emit(apps)
+
+
 class UsbRestartDrmWorker(QThread):
     """Restart DrmApp on the device over USB."""
 
@@ -423,7 +558,7 @@ class UsbRestartDrmWorker(QThread):
                 "utf-8", errors="replace").strip().lower()
             if "ok" not in stdout:
                 raise RuntimeError(f"restart app 返回异常: {stdout}")
-            self.reload_succeeded.emit()
+            self.restart_succeeded.emit()
         except Exception as ex:
             logger.exception("USB restart DRM failed")
             self.restart_failed.emit(ex)
