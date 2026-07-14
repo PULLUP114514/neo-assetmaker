@@ -1,7 +1,7 @@
 '''USB管理器页'''
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QInputDialog,
     QSplitter,
@@ -16,15 +16,15 @@ from qfluentwidgets import (
     InfoBarPosition,
     PrimaryPushButton,
     ProgressBar,
+    PushButton,
     SimpleCardWidget,
     SubtitleLabel,
 )
 
 from gui.widgets.usb_sub_pages import UsbSubPageWidget
-from gui.workers.usb_workers import UsbConnectWorker
+from gui.workers.usb_workers import UsbConnectWorker, UsbRebootWorker, UsbRestartDrmWorker
 import usb.core
 import usb.util
-
 
 
 class UsbControlPage(QWidget):
@@ -37,9 +37,17 @@ class UsbControlPage(QWidget):
         self._settings: dict = {}
         self._is_busy = False
         self._is_connected = False
+        self._is_scanning = False
 
-        # Worker reference (connection only; sub-page owns its workers)
+        # Worker references
         self._connect_worker = None
+        self._restart_worker = None
+        self._reboot_worker = None
+
+        # Scan timer (used after reboot to auto-reconnect)
+        self._scan_timer = QTimer(self)
+        self._scan_timer.setInterval(2000)
+        self._scan_timer.timeout.connect(self._on_scan_tick)
 
         self._init_ui()
         self._connect_signals()
@@ -81,6 +89,7 @@ class UsbControlPage(QWidget):
         wrapper.setContentsMargins(10, 0, 10, 0)
         wrapper.addWidget(self.connectionStatusLabel)
         wrapper.addWidget(self.progressBar)
+
         wrapper.addWidget(self.progressLabel)
         self.mainLayout.addLayout(wrapper)
 
@@ -99,6 +108,14 @@ class UsbControlPage(QWidget):
         self.btnConnect.setIcon(FluentIcon.WIFI)
         layout.addWidget(self.btnConnect)
 
+        self.btnRestartDrm = PushButton("重启 DrmApp")
+        self.btnRestartDrm.setIcon(FluentIcon.UPDATE)
+        layout.addWidget(self.btnRestartDrm)
+
+        self.btnReboot = PushButton("重启设备")
+        self.btnReboot.setIcon(FluentIcon.POWER_BUTTON)
+        layout.addWidget(self.btnReboot)
+
         self.comboSubPage = ComboBox()
         self.comboSubPage.addItems(["素材管理", "应用管理"])
         self.comboSubPage.setCurrentIndex(0)
@@ -109,7 +126,14 @@ class UsbControlPage(QWidget):
         self.btnConnect.clicked.connect(self._on_connect)
 
         # 子页面下拉切换
-        self.comboSubPage.currentIndexChanged.connect(self._on_sub_page_changed)
+        self.comboSubPage.currentIndexChanged.connect(
+            self._on_sub_page_changed)
+
+        # 重启DRM
+        self.btnRestartDrm.clicked.connect(self._on_restart_drm)
+
+        # 重启设备
+        self.btnReboot.clicked.connect(self._on_reboot)
 
         # UI操作信号
         self.usb_exception.connect(self._on_usb_exception)
@@ -126,6 +150,10 @@ class UsbControlPage(QWidget):
         self.VID = int(self._settings.get("usb_controler_vid"), 16)
         self.PID = int(self._settings.get("usb_controler_pid"), 16)
         """连接click"""
+        if self._is_scanning:
+            self._stop_scanning()
+            self._update_connection_ui("Disconnected")
+            return
         if (self._is_connected == True):
             self._on_manually_disconnect()
             return
@@ -269,6 +297,140 @@ class UsbControlPage(QWidget):
             self._update_connection_ui("Disconnected")
 
     # ------------------------------------------------------------------
+    # Restart DRM
+    # ------------------------------------------------------------------
+
+    def _on_restart_drm(self):
+        '''重启DRM'''
+        if self._is_busy or not self._is_connected:
+            return
+        self.set_busy(True)
+
+        self._restart_worker = UsbRestartDrmWorker(
+            self.usbRC, parent=self
+        )
+        self._restart_worker.restart_succeeded.connect(self._on_restart_done)
+        self._restart_worker.restart_failed.connect(self._on_restart_failed)
+        self._restart_worker.start()
+
+    def _on_restart_done(self):
+        """重启DRM完成"""
+        self.set_busy(False)
+        InfoBar.success(
+            "已请求重启",
+            "已向设备发送 DrmApp 重启请求。",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
+
+    def _on_restart_failed(self, error):
+        """重启DRM失败"""
+        self.set_busy(False)
+        InfoBar.error(
+            "重启失败",
+            str(error),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    # ------------------------------------------------------------------
+    # Reboot device
+    # ------------------------------------------------------------------
+
+    def _on_reboot(self):
+        '''重启设备 — 发送 reboot 命令后断开连接'''
+        if self._is_busy or not self._is_connected:
+            return
+        self.set_busy(True)
+        self.connectionStatusLabel.setText("正在重启设备...")
+
+        self._reboot_worker = UsbRebootWorker(self.usbRC, parent=self)
+        self._reboot_worker.reboot_completed.connect(self._on_reboot_done)
+        self._reboot_worker.start()
+
+    def _on_reboot_done(self):
+        """重启命令已发送，清理连接并开始扫描设备"""
+        self.set_busy(False)
+        self.usbRC = None
+        self.subPageWidget.clear_asset_list()
+        InfoBar.info(
+            "已发送重启命令",
+            f"正在扫描等待设备重启...",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
+        self._start_scanning()
+
+    # ------------------------------------------------------------------
+    # Device scanning (post-reboot auto-reconnect)
+    # ------------------------------------------------------------------
+
+    def _start_scanning(self):
+        """开始扫描设备，等待重启后重连"""
+        self._is_scanning = True
+        self.connectionStatusLabel.setText("正在扫描设备...")
+        self.btnConnect.setText("取消扫描")
+        self.btnConnect.setEnabled(True)
+        self.comboSubPage.setEnabled(False)
+        self.btnRestartDrm.setEnabled(False)
+        self.btnReboot.setEnabled(False)
+        self.subPageWidget.set_buttons_enabled(False)
+        self.progressBar.setRange(0, 0)  # 不确定进度
+        self.progressBar.setVisible(True)
+        self._scan_timer.start()
+
+    def _stop_scanning(self):
+        """停止扫描"""
+        self._scan_timer.stop()
+        self._is_scanning = False
+        self.progressBar.setVisible(False)
+        self.progressBar.setRange(0, 100)
+
+    def _on_scan_tick(self):
+        """扫描定时器回调 — 枚举设备并尝试连接"""
+        self.VID = int(self._settings.get("usb_controler_vid"), 16)
+        self.PID = int(self._settings.get("usb_controler_pid"), 16)
+
+        # 枚举匹配设备
+        candidates = []
+        for dev in usb.core.find(find_all=True):
+            if dev.idVendor == self.VID and dev.idProduct == self.PID:
+                candidates.append(dev)
+
+        if not candidates:
+            # 未发现设备，继续扫描
+            return
+
+        # 发现设备，选第一个尝试连接
+        self._stop_scanning()
+        dev = candidates[0]
+        self._update_connection_ui("Connecting")
+
+        self._connect_worker = UsbConnectWorker(
+            vid=dev.idVendor,
+            pid=dev.idProduct,
+            bus=dev.bus,
+            address=dev.address,
+            interface=0,
+            timeout_ms=30000,
+            usb_exception_callback=self.usb_exception.emit,
+            parent=self,
+        )
+        self._connect_worker.connect_succeeded.connect(
+            self._on_connect_success)
+        self._connect_worker.connect_failed.connect(
+            self._on_scan_connect_failed)
+        self._connect_worker.start()
+
+    def _on_scan_connect_failed(self, error):
+        """扫描中发现设备但连接失败 — 停止扫描，显示错误"""
+        self._update_connection_ui("Disconnected")
+        self._on_usb_exception(error)
+
+    # ------------------------------------------------------------------
     # Settings & UI helpers
     # ------------------------------------------------------------------
 
@@ -278,6 +440,8 @@ class UsbControlPage(QWidget):
     def _update_connection_ui(self, state: str, success_str=None):
         if state == "Connected":
             self._is_connected = True
+            self._is_scanning = False
+            self._scan_timer.stop()
             self.connectionStatusLabel.setText(
                 f"已连接设备：{success_str}" if success_str else "已连接设备"
             )
@@ -289,6 +453,8 @@ class UsbControlPage(QWidget):
             self._is_busy = True
         elif state == "Disconnected":
             self._is_connected = False
+            self._is_scanning = False
+            self._scan_timer.stop()
             self.connectionStatusLabel.setText("连接失败")
             self.btnConnect.setText("连接设备")
             self._is_busy = False
@@ -299,6 +465,8 @@ class UsbControlPage(QWidget):
         self._is_busy = busy
         self.btnConnect.setEnabled(not busy)
         self.comboSubPage.setEnabled(not busy)
+        self.btnRestartDrm.setEnabled(not busy and self._is_connected)
+        self.btnReboot.setEnabled(not busy and self._is_connected)
         if self.subPageWidget:
             self.subPageWidget.set_buttons_enabled(
                 not busy and self._is_connected
@@ -306,7 +474,10 @@ class UsbControlPage(QWidget):
 
     def shutdown(self):
         """等待所有后台工作线程结束"""
-        if self._connect_worker and self._connect_worker.isRunning():
-            self._connect_worker.wait(3000)
+        self._scan_timer.stop()
+        for worker in [self._connect_worker, self._restart_worker,
+                       self._reboot_worker]:
+            if worker and worker.isRunning():
+                worker.wait(3000)
         if self.subPageWidget:
             self.subPageWidget.shutdown()

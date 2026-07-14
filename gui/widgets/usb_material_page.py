@@ -37,7 +37,6 @@ from gui.workers.usb_workers import (
     UsbDownloadAssetWorker,
     UsbListOperatorsWorker,
     UsbReloadAssetsWorker,
-    UsbRestartDrmWorker,
     UsbUploadAssetWorker,
 )
 
@@ -130,7 +129,6 @@ class UsbMaterialPage(QWidget):
         self._upload_worker = None
         self._download_worker = None
         self._delete_worker = None
-        self._restart_worker = None
         self._reload_worker = None
 
         # Temp directory for operator preview icons
@@ -164,9 +162,9 @@ class UsbMaterialPage(QWidget):
         self.btnUploadLocal.setIcon(FluentIcon.SEND)
         actionLayout.addWidget(self.btnUploadLocal)
 
-        self.btnRestartDrm = PushButton("重启 DrmApp")
-        self.btnRestartDrm.setIcon(FluentIcon.UPDATE)
-        actionLayout.addWidget(self.btnRestartDrm)
+        self.btnForceReload = PushButton("强制DRM重载")
+        self.btnForceReload.setIcon(FluentIcon.SYNC)
+        actionLayout.addWidget(self.btnForceReload)
 
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
@@ -210,7 +208,7 @@ class UsbMaterialPage(QWidget):
         """连接内部按钮信号"""
         self.btnRefreshList.clicked.connect(self._on_refresh_list)
         self.btnUploadLocal.clicked.connect(self._on_upload_local)
-        self.btnRestartDrm.clicked.connect(self._on_restart_drm)
+        self.btnForceReload.clicked.connect(self._on_force_reload)
 
     # ------------------------------------------------------------------
     # Public API
@@ -229,7 +227,7 @@ class UsbMaterialPage(QWidget):
         """批量设置按钮启用状态"""
         self.btnRefreshList.setEnabled(enabled)
         self.btnUploadLocal.setEnabled(enabled)
-        self.btnRestartDrm.setEnabled(enabled)
+        self.btnForceReload.setEnabled(enabled)
         for i in range(self.assetDetailList.count()):
             item = self.assetDetailList.item(i)
             widget = self.assetDetailList.itemWidget(item)
@@ -243,7 +241,6 @@ class UsbMaterialPage(QWidget):
             self._upload_worker,
             self._download_worker,
             self._delete_worker,
-            self._restart_worker,
             self._reload_worker,
         ]:
             if worker and worker.isRunning():
@@ -530,39 +527,40 @@ class UsbMaterialPage(QWidget):
         )
 
     # ------------------------------------------------------------------
-    # Restart DRM
+    # 强制刷新远端素材
     # ------------------------------------------------------------------
 
-    def _on_restart_drm(self):
-        '''重启DRM'''
+    def _on_force_reload(self):
+        '''强制DRM重载 — 手动触发 epassctl prts reload_assets，不刷新本地列表'''
         ctrl = self.controller
         if ctrl._is_busy or not ctrl._is_connected:
             return
         ctrl.set_busy(True)
+        ctrl.progressLabel.setText("正在强制重载DRM资产...")
 
-        self._restart_worker = UsbRestartDrmWorker(
-            ctrl.usbRC, parent=self
-        )
-        self._restart_worker.restart_succeeded.connect(self._on_restart_done)
-        self._restart_worker.restart_failed.connect(self._on_restart_failed)
-        self._restart_worker.start()
+        self._reload_worker = UsbReloadAssetsWorker(ctrl.usbRC, parent=self)
+        self._reload_worker.reload_succeeded.connect(self._on_force_reload_done)
+        self._reload_worker.reload_failed.connect(self._on_force_reload_failed)
+        self._reload_worker.start()
 
-    def _on_restart_done(self):
-        """重启DRM完成"""
+    def _on_force_reload_done(self):
+        """强制重载完成"""
         self.controller.set_busy(False)
+        self.controller.progressLabel.setText("")
         InfoBar.success(
-            "已请求重启",
-            "已向设备发送 DrmApp 重启请求。",
+            "强制重载完成",
+            "已向设备发送 reload_assets 命令。",
             parent=self,
             position=InfoBarPosition.TOP,
             duration=3000,
         )
 
-    def _on_restart_failed(self, error):
-        """重启DRM失败"""
+    def _on_force_reload_failed(self, error):
+        """强制重载失败"""
         self.controller.set_busy(False)
+        self.controller.progressLabel.setText("")
         InfoBar.error(
-            "重启失败",
+            "强制重载失败",
             str(error),
             parent=self,
             position=InfoBarPosition.TOP,

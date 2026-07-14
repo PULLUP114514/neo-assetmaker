@@ -1,4 +1,4 @@
-"""Qt workers for EPass USB bulk-transfer remote management."""
+""" USB 管理器后台工作线程"""
 
 from __future__ import annotations
 
@@ -418,8 +418,12 @@ class UsbRestartDrmWorker(QThread):
 
     def run(self):
         try:
-            self._usbRC.command_exec(self._command)
-            self.restart_succeeded.emit()
+            result = self._usbRC.command_exec(self._command)
+            stdout = result.stdout.decode(
+                "utf-8", errors="replace").strip().lower()
+            if "ok" not in stdout:
+                raise RuntimeError(f"restart app 返回异常: {stdout}")
+            self.reload_succeeded.emit()
         except Exception as ex:
             logger.exception("USB restart DRM failed")
             self.restart_failed.emit(ex)
@@ -437,8 +441,30 @@ class UsbReloadAssetsWorker(QThread):
 
     def run(self):
         try:
-            self._usbRC.command_exec("epassctl prts reload_assets")
+            result = self._usbRC.command_exec("epassctl prts reload_assets")
+            stdout = result.stdout.decode(
+                "utf-8", errors="replace").strip().lower()
+            if "ok" not in stdout:
+                raise RuntimeError(f"reload_assets 返回异常: {stdout}")
             self.reload_succeeded.emit()
         except Exception as ex:
             logger.exception("USB reload assets failed")
             self.reload_failed.emit(ex)
+
+
+class UsbRebootWorker(QThread):
+    """Reboot the device over USB. 不判定返回值，执行完毕即通知完成。"""
+
+    reboot_completed = pyqtSignal()
+
+    def __init__(self, usbRC: UsbResponderClient, parent=None):
+        super().__init__(parent)
+        self._usbRC = usbRC
+
+    def run(self):
+        try:
+            self._usbRC.command_exec("reboot")
+        except Exception:
+            # 设备即将断开，异常属于预期行为
+            pass
+        self.reboot_completed.emit()
