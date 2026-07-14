@@ -1,10 +1,30 @@
 from __future__ import annotations
 from typing import Callable, Optional
 import argparse
+import ctypes.util as _ctu
 import os
 import struct
 import sys
 from typing import Dict, List, Optional, Tuple
+
+# ---------------------------------------------------------------------------
+# cx_freeze 打包后 libusb-1.0.dll 放在 exe 同目录下，但 ctypes.util.find_library
+# 在 Windows 上不搜索该目录。在 pyusb 首次 import 前劫持 find_library，让它在
+# exe 所在目录中也能找到 DLL。
+# ---------------------------------------------------------------------------
+if getattr(sys, "frozen", False):
+    _FROZEN_DLL_DIR = os.path.dirname(sys.executable)
+    _orig_find_library = _ctu.find_library
+
+    def _find_library_in_exe_dir(name: str) -> str | None:
+        """优先在 exe 目录中查找 DLL，回退到系统默认搜索。"""
+        dll_name = name if name.endswith(".dll") else name + ".dll"
+        dll_path = os.path.join(_FROZEN_DLL_DIR, dll_name)
+        if os.path.isfile(dll_path):
+            return dll_path
+        return _orig_find_library(name)
+
+    _ctu.find_library = _find_library_in_exe_dir
 
 import usb.core
 import usb.util
