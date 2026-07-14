@@ -1,0 +1,66 @@
+'''USB管理器子页面容器'''
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+from PyQt6.QtWidgets import (
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+if TYPE_CHECKING:
+    from gui.widgets.usb_control_page import UsbControlPage
+
+from gui.widgets.usb_app_page import UsbAppPage
+from gui.widgets.usb_material_page import UsbMaterialPage
+
+
+class UsbSubPageWidget(QWidget):
+    """USB管理器右侧子页面容器。
+
+    包含素材管理和应用管理两个子页面，
+    通过 QStackedWidget 切换显示。
+    """
+
+    def __init__(self, controller: UsbControlPage, parent=None):
+        super().__init__(parent)
+        self.controller = controller
+
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.stackedWidget = QStackedWidget()
+
+        self.materialPage = UsbMaterialPage(controller=self.controller)
+        self.appPage = UsbAppPage()
+
+        self.stackedWidget.addWidget(self.materialPage)
+        self.stackedWidget.addWidget(self.appPage)
+        layout.addWidget(self.stackedWidget)
+
+    # ------------------------------------------------------------------
+    # Public API — 委托给 materialPage
+    # ------------------------------------------------------------------
+
+    def setCurrentIndex(self, index: int):
+        """切换当前显示的子页面"""
+        self.stackedWidget.setCurrentIndex(index)
+
+    def refresh_asset_list(self):
+        """委托 materialPage 刷新素材列表"""
+        self.materialPage.refresh_asset_list()
+
+    def clear_asset_list(self):
+        """委托 materialPage 清空素材列表"""
+        self.materialPage.clear_asset_list()
+
+    def set_buttons_enabled(self, enabled: bool):
+        """委托 materialPage 设置按钮启用状态"""
+        self.materialPage.set_buttons_enabled(enabled)
+
+    def shutdown(self):
+        """委托 materialPage 关闭工作线程并清理"""
+        self.materialPage.shutdown()
