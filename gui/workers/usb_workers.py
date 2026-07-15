@@ -79,9 +79,12 @@ class UsbListAssetsWorker(QThread):
 
 
 class UsbListOperatorsWorker(QThread):
-    """Walk /assets/ subdirectories, parse epconfig.json, and cache preview icons."""
+    """Walk /assets/ and /sd/assets/ subdirectories, parse epconfig.json, and cache preview icons."""
 
     _FALLBACK = "？？？（不合法缺省值）"
+
+    # Base paths to scan for assets (internal storage + data disk)
+    _ASSET_ROOTS = ["/assets", "/sd/assets"]
 
     list_completed = pyqtSignal(list)  # list of operator data dicts
     list_failed = pyqtSignal(object)  # exception
@@ -111,13 +114,13 @@ class UsbListOperatorsWorker(QThread):
         finally:
             usbRC._disconnect_callback = saved
 
-    def _load_epconfig(self, dirname: str) -> dict:
-        """Download and parse /assets/{dirname}/epconfig.json.
+    def _load_epconfig(self, base: str, dirname: str, idx: int) -> dict:
+        """Download and parse {base}/{dirname}/epconfig.json.
 
         Returns the parsed dict on success, or an empty dict on any failure.
         """
-        remote = f"/assets/{dirname}/epconfig.json"
-        local = os.path.join(self._temp_dir, f"{dirname}_epconfig.json")
+        remote = f"{base}/{dirname}/epconfig.json"
+        local = os.path.join(self._temp_dir, f"op_{idx}_epconfig.json")
         try:
             self._suppress_disconnect(
                 self._usbRC, self._usbRC.file_get, remote, local)
@@ -127,14 +130,14 @@ class UsbListOperatorsWorker(QThread):
             logger.warning("Failed to load epconfig: %s", remote)
             return {}
 
-    def _download_icon(self, dirname: str, icon_filename: str, idx: int) -> str:
-        """Download icon from /assets/{dirname}/{icon_filename} to temp dir.
+    def _download_icon(self, base: str, dirname: str, icon_filename: str, idx: int) -> str:
+        """Download icon from {base}/{dirname}/{icon_filename} to temp dir.
 
         Falls back to /root/res/defaulticon.png when icon_filename is empty.
         Returns the local path on success, or empty string on failure.
         """
         if icon_filename:
-            remote = f"/assets/{dirname}/{icon_filename}"
+            remote = f"{base}/{dirname}/{icon_filename}"
         else:
             remote = "/root/res/defaulticon.png"
         local = os.path.join(self._temp_dir, f"op_{idx}_icon.png")
@@ -146,66 +149,63 @@ class UsbListOperatorsWorker(QThread):
             logger.warning("Failed to download icon: %s", remote)
             return ""
 
-    def run(self):
-        F = self._FALLBACK
-        operators: list = []
+    def _scan_root(self, base: str, operators: list, idx_offset: int) -> int:
+        """Scan one asset root directory, append results to operators list.
 
-        # 列出 /assets/ 下所有子目录
+        Returns the number of entries processed (for index tracking).
+        """
         try:
-            _, dirs = self._usbRC.file_list("/assets")
-        except Exception as ex:
-            logger.exception("USB list /assets failed")
-            self.list_failed.emit(ex)
-            return
+            _, dirs = self._usbRC.file_list(base)
+        except Exception:
+            logger.warning("USB list %s failed (may not exist)", base)
+            return 0
 
         total = len(dirs)
+        count = 0
 
-        # 遍历每个子目录，解析 epconfig.json 并缓存图标
         for i, dirname in enumerate(dirs):
             # 跳过非素材目录（如隐藏文件、系统目录）
             if dirname.startswith("."):
                 continue
 
-            pct = int((i + 1) / max(total, 1) * 100)
-            self.progress_updated.emit(pct, f"加载: {dirname}")
+            idx = idx_offset + count
+            count += 1
 
-            info = self._load_epconfig(dirname)
+            pct = int((i + 1) / max(total, 1) * 100)
+            self.progress_updated.emit(pct, f"加载: {base}/{dirname}")
+
+            info = self._load_epconfig(base, dirname, idx)
             if not info:
                 # epconfig 不存在或无法解析 → 全部用缺省值填充
                 operators.append({
-                    "name": F,
-                    "uuid": F,
-                    "version": F,
-                    "screen": F,
-                    "description": f"",
-                    "path": f"/assets/{dirname}",
-                    "delete_path": f"/assets/{dirname}",
+                    "name": self._FALLBACK,
+                    "uuid": self._FALLBACK,
+                    "version": self._FALLBACK,
+                    "screen": self._FALLBACK,
+                    "description": "",
+                    "path": f"{base}/{dirname}",
+                    "delete_path": f"{base}/{dirname}",
                     "local_icon": "",
                     "is_dir": False,
                 })
                 continue
 
-            name = info.get("name") or F
-            uuid = info.get("uuid") or F
-            version = info.get("version", F)
-            screen = info.get("screen") or F
+            name = info.get("name") or self._FALLBACK
+            uuid = info.get("uuid") or self._FALLBACK
+            version = info.get("version", self._FALLBACK)
+            screen = info.get("screen") or self._FALLBACK
             icon_filename = info.get("icon", "")
 
             # 构建描述文本
             desc_parts = []
-            # if uuid != F:
-            #     desc_parts.append(f"UUID: {uuid}")
-            if version != F:
+            if version != self._FALLBACK:
                 desc_parts.append(f"版本: {version}")
-            if screen != F:
+            if screen != self._FALLBACK:
                 desc_parts.append(f"分辨率: {screen}")
-            description = "  |  ".join(desc_parts) if desc_parts else F
+            description = "  |  ".join(desc_parts) if desc_parts else self._FALLBACK
 
             # 载入图标
-            local_icon = self._download_icon(dirname, icon_filename, i)
-
-            # 远程路径
-            remote_icon = f"/assets/{dirname}/{icon_filename}" if icon_filename else ""
+            local_icon = self._download_icon(base, dirname, icon_filename, idx)
 
             operators.append({
                 "name": name,
@@ -213,11 +213,29 @@ class UsbListOperatorsWorker(QThread):
                 "version": version,
                 "screen": screen,
                 "description": description,
-                "path": f"/assets/{dirname}",
-                "delete_path": f"/assets/{dirname}",
+                "path": f"{base}/{dirname}",
+                "delete_path": f"{base}/{dirname}",
                 "local_icon": local_icon,
                 "is_dir": False,
             })
+
+        return count
+
+    def run(self):
+        operators: list = []
+
+        # /assets is mandatory — fail early if it can't be listed
+        try:
+            self._usbRC.file_list("/assets")
+        except Exception as ex:
+            logger.exception("USB list /assets failed")
+            self.list_failed.emit(ex)
+            return
+
+        idx_offset = 0
+        for base in self._ASSET_ROOTS:
+            processed = self._scan_root(base, operators, idx_offset)
+            idx_offset += processed
 
         self.list_completed.emit(operators)
 

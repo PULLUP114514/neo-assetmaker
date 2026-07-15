@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
     QMessageBox,
+    QRadioButton,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -134,6 +136,9 @@ class UsbMaterialPage(QWidget):
         # Temp directory for operator preview icons
         self._temp_dir = tempfile.mkdtemp(prefix="usb_op_icons_")
 
+        # Full asset list cache for client-side filtering
+        self._full_asset_list: list = []
+
         self._init_ui()
         self._connect_signals()
 
@@ -185,6 +190,27 @@ class UsbMaterialPage(QWidget):
         self.middleTitleLabel = CaptionLabel("远程素材")
         assetLayout.addWidget(self.middleTitleLabel)
 
+        # Filter radio buttons
+        filterLayout = QHBoxLayout()
+        filterLayout.setContentsMargins(0, 0, 0, 0)
+        filterLayout.setSpacing(12)
+
+        self._filter_group = QButtonGroup(self)
+        self._radio_all = QRadioButton("全部")
+        self._radio_sys = QRadioButton("系统盘")
+        self._radio_data = QRadioButton("数据盘")
+        self._radio_all.setChecked(True)
+
+        self._filter_group.addButton(self._radio_all, 0)
+        self._filter_group.addButton(self._radio_sys, 1)
+        self._filter_group.addButton(self._radio_data, 2)
+
+        filterLayout.addWidget(self._radio_all)
+        filterLayout.addWidget(self._radio_sys)
+        filterLayout.addWidget(self._radio_data)
+        filterLayout.addStretch()
+        assetLayout.addLayout(filterLayout)
+
         self.assetDetailList = ListWidget()
         self.assetDetailList.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         setCustomStyleSheet(
@@ -208,6 +234,7 @@ class UsbMaterialPage(QWidget):
         self.btnRefreshList.clicked.connect(self._on_refresh_list)
         self.btnUploadLocal.clicked.connect(self._on_upload_local)
         self.btnForceReload.clicked.connect(self._on_force_reload)
+        self._filter_group.idClicked.connect(self._on_filter_changed)
 
     # ------------------------------------------------------------------
     # Public API
@@ -219,6 +246,7 @@ class UsbMaterialPage(QWidget):
 
     def clear_asset_list(self):
         """清空素材列表"""
+        self._full_asset_list = []
         self.assetDetailList.clear()
         self.middleTitleLabel.setText("远程素材")
 
@@ -271,22 +299,59 @@ class UsbMaterialPage(QWidget):
         self._list_worker.start()
 
     def _on_list_loaded(self, operators: list):
-        """干员列表加载完成"""
+        """素材列表加载完成 — 缓存全量并应用当前筛选"""
+        self._full_asset_list = operators
+        self._render_filtered_list()
+        self.controller.set_busy(False)
+
+    # ------------------------------------------------------------------
+    # Client-side filter
+    # ------------------------------------------------------------------
+
+    def _on_filter_changed(self, _id: int):
+        """筛选切换 — 从缓存列表客户端过滤，无需重新请求"""
+        if self.controller._is_busy:
+            return
+        self._render_filtered_list()
+
+    def _filter_assets(self) -> list:
+        """按当前选中的筛选项返回素材列表。"""
+        filter_id = self._filter_group.checkedId()
+        if filter_id == 1:
+            # 系统盘 only
+            return [a for a in self._full_asset_list
+                    if (a.get("path") or "").startswith("/assets/")]
+        elif filter_id == 2:
+            # 数据盘 only
+            return [a for a in self._full_asset_list
+                    if (a.get("path") or "").startswith("/sd/")]
+        # 全部 (0 or fallback)
+        return self._full_asset_list
+
+    def _render_filtered_list(self):
+        """按当前筛选条件渲染素材列表。"""
+        assets = self._filter_assets()
         self.assetDetailList.clear()
-        if not operators:
+        if not self._full_asset_list:
             self.middleTitleLabel.setText("远程素材")
             placeholder = QListWidgetItem("设备端暂未返回干员信息。")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self.assetDetailList.addItem(placeholder)
+        elif not assets:
+            self.middleTitleLabel.setText("远程素材（0 条匹配）")
+            placeholder = QListWidgetItem("当前筛选项下无匹配素材。")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.assetDetailList.addItem(placeholder)
         else:
-            self.middleTitleLabel.setText(f"远程素材（总计：{len(operators)}）")
-            for op in operators:
+            self.middleTitleLabel.setText(
+                f"远程素材（总计：{len(self._full_asset_list)}，显示：{len(assets)}）"
+            )
+            for op in assets:
                 widget = UsbAssetListItemWidget(op, parent_page=self)
                 list_item = QListWidgetItem(self.assetDetailList)
                 list_item.setSizeHint(widget.sizeHint())
                 self.assetDetailList.addItem(list_item)
                 self.assetDetailList.setItemWidget(list_item, widget)
-        self.controller.set_busy(False)
 
     def _on_list_failed(self, error):
         """素材列表加载失败"""
@@ -304,7 +369,7 @@ class UsbMaterialPage(QWidget):
     # ------------------------------------------------------------------
 
     def _on_upload_local(self):
-        '''本地上传 — 读取 epconfig.json 获取 uuid，上传到 /assets/{uuid}'''
+        '''本地上传 — 读取 epconfig.json 获取 uuid，询问磁盘目标后上传'''
         ctrl = self.controller
         if ctrl._is_busy or not ctrl._is_connected:
             return
@@ -337,12 +402,28 @@ class UsbMaterialPage(QWidget):
             )
             return
 
+        name = epconfig.get("name", uuid)
+
+        # Ask user which disk to upload to
+        msg = QMessageBox(self)
+        msg.setWindowTitle("选择目标磁盘")
+        msg.setText(f"将素材「{name}」上传到：")
+        msg.addButton("系统盘  (/assets)", QMessageBox.ButtonRole.AcceptRole)
+        btn_data = msg.addButton("数据盘  (/sd/assets)", QMessageBox.ButtonRole.ApplyRole)
+        btn_cancel = msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked == btn_cancel or clicked is None:
+            return
+        base = "/sd/assets" if clicked == btn_data else "/assets"
+
         ctrl.set_busy(True)
         ctrl.progressBar.setVisible(True)
         ctrl.progressBar.setValue(0)
         ctrl.progressLabel.setText("正在上传...")
 
-        remote_path = f"/assets/{uuid}"
+        remote_path = f"{base}/{uuid}"
         self._upload_worker = UsbUploadAssetWorker(
             ctrl.usbRC, path, remote_path, parent=self
         )
