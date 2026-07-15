@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QFileDialog,
     QFrame,
@@ -24,6 +25,7 @@ from qfluentwidgets import (
     InfoBarPosition,
     ListWidget,
     PushButton,
+    ToolButton,
     SimpleCardWidget,
     StrongBodyLabel,
     setCustomStyleSheet,
@@ -192,6 +194,11 @@ class UsbFilePage(QWidget):
         self.pathLabel = StrongBodyLabel("/")
         pathBar.addWidget(self.pathLabel, stretch=1)
 
+        self.btnCopyPath = ToolButton(FluentIcon.COPY)
+        self.btnCopyPath.setCheckable(True)
+        self.btnCopyPath.setToolTip("复制当前路径")
+        pathBar.addWidget(self.btnCopyPath)
+
         fileLayout.addLayout(pathBar)
 
         # Separator
@@ -237,6 +244,7 @@ class UsbFilePage(QWidget):
         self.btnMkdir.clicked.connect(self._on_mkdir)
         self.btnGoUp.clicked.connect(self._on_go_up)
         self.btnInvertSel.clicked.connect(self._on_invert_selection)
+        self.btnCopyPath.clicked.connect(self._on_copy_path)
         self.fileList.itemDoubleClicked.connect(self._on_item_double_clicked)
 
     # ------------------------------------------------------------------
@@ -279,7 +287,8 @@ class UsbFilePage(QWidget):
             self.controller.set_busy(False)
             self.controller.progressBar.setVisible(False)
             self.controller.progressLabel.setText("")
-            InfoBar.success("上传完成", "", parent=self, position=InfoBarPosition.TOP, duration=3000)
+            InfoBar.success("上传完成", "", parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
             self._list_current_path()
             return
 
@@ -293,7 +302,8 @@ class UsbFilePage(QWidget):
             self.controller.usbRC, local, remote, parent=self
         )
         self._upload_worker.progress_updated.connect(self._on_task_progress)
-        self._upload_worker.upload_completed.connect(lambda _: self._upload_dropped_next())
+        self._upload_worker.upload_completed.connect(
+            lambda _: self._upload_dropped_next())
         self._upload_worker.upload_failed.connect(
             lambda e, n=name: self._on_drop_upload_failed(e, n)
         )
@@ -301,7 +311,8 @@ class UsbFilePage(QWidget):
 
     def _on_drop_upload_failed(self, error, name: str):
         """Single drop-upload failed — continue with remaining."""
-        InfoBar.error("上传失败", f"{name}: {error}", parent=self, position=InfoBarPosition.TOP, duration=5000)
+        InfoBar.error("上传失败", f"{name}: {error}", parent=self,
+                      position=InfoBarPosition.TOP, duration=5000)
         self._upload_dropped_next()
 
     # ------------------------------------------------------------------
@@ -331,6 +342,7 @@ class UsbFilePage(QWidget):
         self.btnStat.setEnabled(enabled)
         self.btnMkdir.setEnabled(enabled)
         self.btnInvertSel.setEnabled(enabled)
+        self.btnCopyPath.setEnabled(enabled)
         self.btnGoUp.setEnabled(enabled and self._current_path != "/")
         self.fileList.setEnabled(enabled)
 
@@ -407,6 +419,12 @@ class UsbFilePage(QWidget):
     # ------------------------------------------------------------------
     # Navigation
     # ------------------------------------------------------------------
+
+    def _on_copy_path(self):
+        """Copy current path to clipboard"""
+        QApplication.clipboard().setText(self._current_path)
+        InfoBar.success("已复制", self._current_path, parent=self,
+                        position=InfoBarPosition.TOP, duration=2000)
 
     def _on_go_up(self):
         """Navigate to parent directory"""
@@ -737,7 +755,7 @@ class UsbFilePage(QWidget):
             # Single item: prompt for destination path (rename or move)
             src_name = checked[0]["name"]
             dst, ok = QInputDialog.getText(
-                self, "移动", f"将 \"{src_name}\" 移动到：")
+                self, "移动", f"将 \"{src_name}\" 移动到：\n（请输入已存在的绝对路径）")
             if not ok or not dst.strip():
                 return
             self._pending_moves = [{

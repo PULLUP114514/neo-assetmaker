@@ -211,7 +211,7 @@ class UsbControlPage(QWidget):
             bus=dev.bus,
             address=dev.address,
             interface=0,
-            timeout_ms=30000,
+            timeout_ms=40000,
             usb_exception_callback=self.usb_exception.emit,
             parent=self,
         )
@@ -422,7 +422,7 @@ class UsbControlPage(QWidget):
             bus=dev.bus,
             address=dev.address,
             interface=0,
-            timeout_ms=30000,
+            timeout_ms=40000,
             usb_exception_callback=self.usb_exception.emit,
             parent=self,
         )
