@@ -341,26 +341,3 @@ class UsbResponderClient:
     def _notify_disconnect(self, error: Optional[BaseException] = None) -> None:
         if self._disconnect_callback:
             self._disconnect_callback(error)
-
-# cl = UsbResponderClient(
-#     vid=VID, pid=PID, bus=1, address=27, interface=0, timeout_ms=300
-# )
-# # kv = cl.hello()
-# # for k in sorted(kv.keys()):
-# # print(f"{k}={kv[k]}")
-# files, dirs = cl.file_list("/assets")
-# for name in dirs:
-#     print(f"{name}/")
-# for name in files:
-#     print(name)
-
-# # for dev in usb.core.find(find_all=True):
-# # if (dev.idVendor == VID and dev.idProduct == PID):
-#     # print(
-#     # hex(dev.idVendor),
-#     # hex(dev.idProduct),
-#     # dev.bus,
-#     # dev.address,
-#     # dev.serial_number
-# # )
-# # print(dev)

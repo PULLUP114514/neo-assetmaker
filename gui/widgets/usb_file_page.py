@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -37,6 +37,7 @@ from gui.workers.usb_workers import (
     UsbDeleteAssetWorker,
     UsbDownloadAssetWorker,
     UsbListAssetsWorker,
+    UsbMkdirWorker,
     UsbMoveWorker,
     UsbStatWorker,
     UsbUploadAssetWorker,
@@ -101,6 +102,7 @@ class UsbFilePage(QWidget):
         self._copy_worker = None
         self._move_worker = None
         self._stat_worker = None
+        self._mkdir_worker = None
 
         self._init_ui()
         self._connect_signals()
@@ -132,6 +134,10 @@ class UsbFilePage(QWidget):
         self.btnUploadFolder = PushButton("上传文件夹")
         self.btnUploadFolder.setIcon(FluentIcon.SEND_FILL)
         actionLayout.addWidget(self.btnUploadFolder)
+
+        self.btnMkdir = PushButton("新建文件夹")
+        self.btnMkdir.setIcon(FluentIcon.FOLDER_ADD)
+        actionLayout.addWidget(self.btnMkdir)
 
         self.btnDownload = PushButton("下载")
         self.btnDownload.setIcon(FluentIcon.DOWNLOAD)
@@ -179,6 +185,10 @@ class UsbFilePage(QWidget):
         self.btnGoUp.setEnabled(False)  # disabled at root
         pathBar.addWidget(self.btnGoUp)
 
+        self.btnInvertSel = PushButton("反选")
+        self.btnInvertSel.setIcon(FluentIcon.CHECKBOX)
+        pathBar.addWidget(self.btnInvertSel)
+
         self.pathLabel = StrongBodyLabel("/")
         pathBar.addWidget(self.pathLabel, stretch=1)
 
@@ -192,6 +202,8 @@ class UsbFilePage(QWidget):
 
         # File list
         self.fileList = ListWidget()
+        self.fileList.setAcceptDrops(True)
+        self.fileList.installEventFilter(self)
         self.fileList.setSelectionMode(
             ListWidget.SelectionMode.SingleSelection
         )
@@ -222,8 +234,75 @@ class UsbFilePage(QWidget):
         self.btnCopy.clicked.connect(self._on_copy)
         self.btnMove.clicked.connect(self._on_move)
         self.btnStat.clicked.connect(self._on_stat)
+        self.btnMkdir.clicked.connect(self._on_mkdir)
         self.btnGoUp.clicked.connect(self._on_go_up)
+        self.btnInvertSel.clicked.connect(self._on_invert_selection)
         self.fileList.itemDoubleClicked.connect(self._on_item_double_clicked)
+
+    # ------------------------------------------------------------------
+    # Drag & drop
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, obj, event):
+        """Intercept drag-and-drop events on the file list."""
+        if obj == self.fileList:
+            if event.type() == QEvent.Type.DragEnter:
+                if event.mimeData().hasUrls():
+                    event.acceptProposedAction()
+                    return True
+            elif event.type() == QEvent.Type.Drop:
+                paths = [url.toLocalFile() for url in event.mimeData().urls()]
+                if paths and not self.controller._is_busy and self.controller._is_connected:
+                    self._upload_dropped(paths)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _upload_dropped(self, paths: list[str]):
+        """Queue uploads for dropped files/folders, one at a time."""
+        pending = []
+        for p in paths:
+            name = os.path.basename(p)
+            remote = self._current_path.rstrip("/") + "/" + name
+            pending.append((p, remote, name))
+
+        self._drop_total = len(pending)
+        self._drop_done = 0
+        self._pending_uploads = pending
+        self.controller.set_busy(True)
+        self.controller.progressBar.setVisible(True)
+        self.controller.progressBar.setValue(0)
+        self._upload_dropped_next()
+
+    def _upload_dropped_next(self):
+        """Upload next item in the drop queue."""
+        if not self._pending_uploads:
+            self.controller.set_busy(False)
+            self.controller.progressBar.setVisible(False)
+            self.controller.progressLabel.setText("")
+            InfoBar.success("上传完成", "", parent=self, position=InfoBarPosition.TOP, duration=3000)
+            self._list_current_path()
+            return
+
+        local, remote, name = self._pending_uploads.pop(0)
+        self._drop_done += 1
+        self.controller.progressLabel.setText(
+            f"[{self._drop_done}/{self._drop_total}] 正在上传: {name}"
+        )
+
+        self._upload_worker = UsbUploadAssetWorker(
+            self.controller.usbRC, local, remote, parent=self
+        )
+        self._upload_worker.progress_updated.connect(self._on_task_progress)
+        self._upload_worker.upload_completed.connect(lambda _: self._upload_dropped_next())
+        self._upload_worker.upload_failed.connect(
+            lambda e, n=name: self._on_drop_upload_failed(e, n)
+        )
+        self._upload_worker.start()
+
+    def _on_drop_upload_failed(self, error, name: str):
+        """Single drop-upload failed — continue with remaining."""
+        InfoBar.error("上传失败", f"{name}: {error}", parent=self, position=InfoBarPosition.TOP, duration=5000)
+        self._upload_dropped_next()
 
     # ------------------------------------------------------------------
     # Public API
@@ -250,6 +329,8 @@ class UsbFilePage(QWidget):
         self.btnCopy.setEnabled(enabled)
         self.btnMove.setEnabled(enabled)
         self.btnStat.setEnabled(enabled)
+        self.btnMkdir.setEnabled(enabled)
+        self.btnInvertSel.setEnabled(enabled)
         self.btnGoUp.setEnabled(enabled and self._current_path != "/")
         self.fileList.setEnabled(enabled)
 
@@ -263,6 +344,7 @@ class UsbFilePage(QWidget):
             self._copy_worker,
             self._move_worker,
             self._stat_worker,
+            self._mkdir_worker,
         ]:
             if worker and worker.isRunning():
                 worker.wait(3000)
@@ -602,7 +684,8 @@ class UsbFilePage(QWidget):
 
         checked = self._get_selected_items()
         if not checked:
-            InfoBar.warning("未选择", "请先勾选要复制的文件或文件夹。", parent=self, position=InfoBarPosition.TOP, duration=3000)
+            InfoBar.warning("未选择", "请先勾选要复制的文件或文件夹。", parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
             return
 
         src_name = checked[0]["name"]
@@ -615,7 +698,8 @@ class UsbFilePage(QWidget):
         ctrl.set_busy(True)
         ctrl.progressLabel.setText(f"正在复制: {src_name}")
 
-        self._copy_worker = UsbCopyWorker(ctrl.usbRC, src_path, dst.strip(), parent=self)
+        self._copy_worker = UsbCopyWorker(
+            ctrl.usbRC, src_path, dst.strip(), parent=self)
         self._copy_worker.copy_completed.connect(self._on_copy_done)
         self._copy_worker.copy_failed.connect(self._on_copy_failed)
         self._copy_worker.start()
@@ -623,93 +707,248 @@ class UsbFilePage(QWidget):
     def _on_copy_done(self):
         self.controller.set_busy(False)
         self.controller.progressLabel.setText("")
-        InfoBar.success("复制完成", parent=self, position=InfoBarPosition.TOP, duration=3000)
+        InfoBar.success("复制完成", "", parent=self,
+                        position=InfoBarPosition.TOP, duration=3000)
         self._list_current_path()
 
     def _on_copy_failed(self, error):
         self.controller.set_busy(False)
         self.controller.progressLabel.setText("")
-        InfoBar.error("复制失败", str(error), parent=self, position=InfoBarPosition.TOP, duration=5000)
+        InfoBar.error("复制失败", str(error), parent=self,
+                      position=InfoBarPosition.TOP, duration=5000)
 
     # ------------------------------------------------------------------
     # Move
     # ------------------------------------------------------------------
 
     def _on_move(self):
-        """Move/rename checked item via file_rename"""
+        """Move/rename checked items via file_rename"""
         ctrl = self.controller
         if ctrl._is_busy or not ctrl._is_connected:
             return
 
         checked = self._get_selected_items()
         if not checked:
-            InfoBar.warning("未选择", "请先勾选要移动的文件或文件夹。", parent=self, position=InfoBarPosition.TOP, duration=3000)
+            InfoBar.warning("未选择", "请先勾选要移动的文件或文件夹。", parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
             return
 
-        src_name = checked[0]["name"]
-        src_path = self._current_path.rstrip("/") + "/" + src_name
-
-        dst, ok = QInputDialog.getText(self, "移动", f"将 \"{src_name}\" 移动到：")
-        if not ok or not dst.strip():
-            return
+        if len(checked) == 1:
+            # Single item: prompt for destination path (rename or move)
+            src_name = checked[0]["name"]
+            dst, ok = QInputDialog.getText(
+                self, "移动", f"将 \"{src_name}\" 移动到：")
+            if not ok or not dst.strip():
+                return
+            self._pending_moves = [{
+                "name": src_name,
+                "src": self._current_path.rstrip("/") + "/" + src_name,
+                "dst": dst.strip(),
+            }]
+        else:
+            # Multiple items: prompt for destination directory
+            dst, ok = QInputDialog.getText(
+                self, "移动", f"将 {len(checked)} 个项目移动到目录：")
+            if not ok or not dst.strip():
+                return
+            dst_dir = dst.strip().rstrip("/")
+            self._pending_moves = []
+            for item in checked:
+                name = item["name"]
+                self._pending_moves.append({
+                    "name": name,
+                    "src": self._current_path.rstrip("/") + "/" + name,
+                    "dst": dst_dir + "/" + name,
+                })
 
         ctrl.set_busy(True)
-        ctrl.progressLabel.setText(f"正在移动: {src_name}")
+        self._move_next()
 
-        self._move_worker = UsbMoveWorker(ctrl.usbRC, src_path, dst.strip(), parent=self)
-        self._move_worker.move_completed.connect(self._on_move_done)
-        self._move_worker.move_failed.connect(self._on_move_failed)
+    def _move_next(self):
+        """Move items one at a time (sequential)"""
+        if not self._pending_moves:
+            self.controller.set_busy(False)
+            self.controller.progressLabel.setText("")
+            InfoBar.success("移动完成", "", parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
+            self._list_current_path()
+            return
+
+        entry = self._pending_moves.pop(0)
+        self.controller.progressLabel.setText(f"正在移动: {entry['name']}")
+
+        self._move_worker = UsbMoveWorker(
+            self.controller.usbRC, entry["src"], entry["dst"], parent=self
+        )
+        self._move_worker.move_completed.connect(lambda: self._move_next())
+        self._move_worker.move_failed.connect(
+            lambda e, n=entry["name"]: self._on_move_one_failed(e, n)
+        )
         self._move_worker.start()
 
-    def _on_move_done(self):
-        self.controller.set_busy(False)
-        self.controller.progressLabel.setText("")
-        InfoBar.success("移动完成", parent=self, position=InfoBarPosition.TOP, duration=3000)
-        self._list_current_path()
+    def _on_move_one_failed(self, error, name: str):
+        """Single move failed — continue with remaining items"""
+        InfoBar.error("移动失败", f"{name}: {error}", parent=self,
+                      position=InfoBarPosition.TOP, duration=5000)
+        self._move_next()
 
     def _on_move_failed(self, error):
         self.controller.set_busy(False)
         self.controller.progressLabel.setText("")
-        InfoBar.error("移动失败", str(error), parent=self, position=InfoBarPosition.TOP, duration=5000)
+        InfoBar.error("移动失败", str(error), parent=self,
+                      position=InfoBarPosition.TOP, duration=5000)
 
     # ------------------------------------------------------------------
     # Stat
     # ------------------------------------------------------------------
 
     def _on_stat(self):
-        """Show file/directory properties via file_stat"""
+        """Show file/directory properties via file_stat.
+
+        Prefers the highlighted list item; falls back to checkbox selection.
+        """
         ctrl = self.controller
         if ctrl._is_busy or not ctrl._is_connected:
             return
 
-        checked = self._get_selected_items()
-        if not checked:
-            InfoBar.warning("未选择", "请先勾选要查看属性的文件或文件夹。", parent=self, position=InfoBarPosition.TOP, duration=3000)
-            return
+        # Prefer highlighted item
+        selected = self.fileList.selectedItems()
+        if selected:
+            data = selected[0].data(Qt.ItemDataRole.UserRole)
+            if data:
+                name = data["name"]
+            else:
+                return
+        else:
+            # Fallback to checkbox
+            checked = self._get_selected_items()
+            if not checked:
+                InfoBar.warning("未选择", "请先选中或勾选要查看属性的文件或文件夹。",
+                                parent=self, position=InfoBarPosition.TOP, duration=3000)
+                return
+            name = checked[0]["name"]
 
-        name = checked[0]["name"]
         path = self._current_path.rstrip("/") + "/" + name
 
         ctrl.set_busy(True)
         ctrl.progressLabel.setText(f"正在获取属性: {name}")
 
         self._stat_worker = UsbStatWorker(ctrl.usbRC, path, parent=self)
-        self._stat_worker.stat_completed.connect(lambda info, n=name: self._on_stat_done(n, info))
+        self._stat_worker.stat_completed.connect(
+            lambda info, n=name: self._on_stat_done(n, info))
         self._stat_worker.stat_failed.connect(self._on_stat_failed)
         self._stat_worker.start()
+
+    _STAT_LABELS = {
+        "owner": "所有者",
+        "perm": "权限",
+        "size": "大小",
+        "type": "类型",
+    }
+
+    @staticmethod
+    def _format_size(val: str) -> str:
+        """Format raw byte count to human-readable form."""
+        try:
+            size = int(val)
+            for unit in ("B", "KB", "MB", "GB", "TB"):
+                if abs(size) < 1024:
+                    return f"{size} {unit}"
+                size //= 1024
+            return f"{size} PB"
+        except (ValueError, TypeError):
+            return val
+
+    @staticmethod
+    def _format_perm(val: str) -> str:
+        """Format octal permission to rwx notation (e.g. 0755 → rwxr-xr-x)."""
+        rwx_map = {"0": "---", "1": "--x", "2": "-w-", "3": "-wx",
+                   "4": "r--", "5": "r-x", "6": "rw-", "7": "rwx"}
+        perm = val.strip().lstrip("0") or "0"
+        try:
+            if len(perm) <= 3:
+                perm = perm.zfill(3)
+            result = "".join(rwx_map.get(d, "???") for d in perm[-3:])
+            return f"{val}  ({result})"
+        except Exception:
+            return val
 
     def _on_stat_done(self, name: str, info: dict):
         self.controller.set_busy(False)
         self.controller.progressLabel.setText("")
-        lines = [f"名称: {name}"]
+
+        # Human-readable section
+        human_lines = []
         for k, v in info.items():
-            lines.append(f"{k}: {v}")
-        QMessageBox.information(self, f"属性 - {name}", "\n".join(lines))
+            label = self._STAT_LABELS.get(k, k)
+            if k == "size":
+                display_val = self._format_size(v)
+            elif k == "perm":
+                display_val = self._format_perm(v)
+            else:
+                display_val = v
+            human_lines.append(f"  {label}:  {display_val}")
+
+        # Raw section
+        raw_lines = ["--- 原始返回 ---"]
+        for k, v in info.items():
+            raw_lines.append(f"  {k}: {v}")
+
+        text = "\n".join(human_lines + [""] + raw_lines)
+        QMessageBox.information(self, f"属性 - {name}", text)
 
     def _on_stat_failed(self, error):
         self.controller.set_busy(False)
         self.controller.progressLabel.setText("")
-        InfoBar.error("获取属性失败", str(error), parent=self, position=InfoBarPosition.TOP, duration=5000)
+        InfoBar.error("获取属性失败", str(error), parent=self,
+                      position=InfoBarPosition.TOP, duration=5000)
+
+    # ------------------------------------------------------------------
+    # Mkdir
+    # ------------------------------------------------------------------
+
+    def _on_mkdir(self):
+        """Create a new directory in current path"""
+        ctrl = self.controller
+        if ctrl._is_busy or not ctrl._is_connected:
+            return
+
+        name, ok = QInputDialog.getText(self, "新建文件夹", "文件夹名称：")
+        if not ok or not name.strip():
+            return
+
+        path = self._current_path.rstrip("/") + "/" + name.strip()
+        ctrl.set_busy(True)
+        ctrl.progressLabel.setText(f"正在创建文件夹: {name.strip()}")
+
+        self._mkdir_worker = UsbMkdirWorker(ctrl.usbRC, path, parent=self)
+        self._mkdir_worker.mkdir_completed.connect(self._on_mkdir_done)
+        self._mkdir_worker.mkdir_failed.connect(self._on_mkdir_failed)
+        self._mkdir_worker.start()
+
+    def _on_mkdir_done(self):
+        self.controller.set_busy(False)
+        self.controller.progressLabel.setText("")
+        InfoBar.success("文件夹已创建", "", parent=self,
+                        position=InfoBarPosition.TOP, duration=3000)
+        self._list_current_path()
+
+    def _on_mkdir_failed(self, error):
+        self.controller.set_busy(False)
+        self.controller.progressLabel.setText("")
+        InfoBar.error("创建文件夹失败", str(error), parent=self,
+                      position=InfoBarPosition.TOP, duration=5000)
+
+    # ------------------------------------------------------------------
+    # Invert selection
+    # ------------------------------------------------------------------
+
+    def _on_invert_selection(self):
+        """Invert the checked state of all checkboxes in the file list."""
+        for i in range(self.fileList.count()):
+            widget = self.fileList.itemWidget(self.fileList.item(i))
+            if widget:
+                widget.checkbox.setChecked(not widget.checkbox.isChecked())
 
     # ------------------------------------------------------------------
     # Helpers

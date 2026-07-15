@@ -249,6 +249,7 @@ class UsbControlPage(QWidget):
         if isinstance(error, usb.core.USBError):
             title = "USB通信失败"
             message_builder = f"USB设备通信异常：{error}"
+            need_disconnect = True
         elif isinstance(error, TimeoutError):
             title = "USB通信超时"
             message_builder = "USB设备响应超时，请稍后重试"

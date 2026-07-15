@@ -51,7 +51,7 @@ class UsbConnectWorker(QThread):
                 timeout_ms=self._timeout_ms,
                 disconnect_callback=self._usb_exception_callback,
             )
-            kv = usbRC.devinfo()
+            kv = usbRC.hello()
             self.connect_succeeded.emit(usbRC, kv)
         except Exception as ex:
             logger.exception("USB connect failed")
@@ -668,3 +668,23 @@ class UsbStatWorker(QThread):
         except Exception as ex:
             logger.exception("USB stat failed")
             self.stat_failed.emit(ex)
+
+
+class UsbMkdirWorker(QThread):
+    """Create a remote directory."""
+
+    mkdir_completed = pyqtSignal()
+    mkdir_failed = pyqtSignal(object)
+
+    def __init__(self, usbRC: UsbResponderClient, path: str, parent=None):
+        super().__init__(parent)
+        self._usbRC = usbRC
+        self._path = path
+
+    def run(self):
+        try:
+            self._usbRC.dir_mkdir(self._path, parents=True)
+            self.mkdir_completed.emit()
+        except Exception as ex:
+            logger.exception("USB mkdir failed")
+            self.mkdir_failed.emit(ex)
