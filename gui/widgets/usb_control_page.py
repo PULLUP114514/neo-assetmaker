@@ -117,7 +117,7 @@ class UsbControlPage(QWidget):
         layout.addWidget(self.btnReboot)
 
         self.comboSubPage = ComboBox()
-        self.comboSubPage.addItems(["素材管理", "应用管理"])
+        self.comboSubPage.addItems(["素材管理", "应用管理", "文件管理"])
         self.comboSubPage.setCurrentIndex(0)
         layout.addWidget(self.comboSubPage)
 
@@ -270,6 +270,7 @@ class UsbControlPage(QWidget):
             self.usbRC = None
             self.subPageWidget.clear_asset_list()
             self.subPageWidget.clear_app_list()
+            self.subPageWidget.clear_file_list()
             self._update_connection_ui("Disconnected")
         InfoBar.error(
             title,
@@ -296,6 +297,7 @@ class UsbControlPage(QWidget):
             self.usbRC = None
             self.subPageWidget.clear_asset_list()
             self.subPageWidget.clear_app_list()
+            self.subPageWidget.clear_file_list()
             self._update_connection_ui("Disconnected")
 
     # ------------------------------------------------------------------
@@ -357,6 +359,8 @@ class UsbControlPage(QWidget):
         self.set_busy(False)
         self.usbRC = None
         self.subPageWidget.clear_asset_list()
+        self.subPageWidget.clear_app_list()
+        self.subPageWidget.clear_file_list()
         InfoBar.info(
             "已发送重启命令",
             f"正在扫描等待设备重启...",

@@ -603,3 +603,68 @@ class UsbRebootWorker(QThread):
             # 设备即将断开，异常属于预期行为
             pass
         self.reboot_completed.emit()
+
+
+class UsbCopyWorker(QThread):
+    """Copy a remote file or directory via cp -r."""
+
+    copy_completed = pyqtSignal()
+    copy_failed = pyqtSignal(object)
+
+    def __init__(self, usbRC: UsbResponderClient, src: str, dst: str, parent=None):
+        super().__init__(parent)
+        self._usbRC = usbRC
+        self._src = src
+        self._dst = dst
+
+    def run(self):
+        try:
+            result = self._usbRC.command_exec(f"cp -r {self._src} {self._dst}")
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            if stderr:
+                raise RuntimeError(stderr)
+            self.copy_completed.emit()
+        except Exception as ex:
+            logger.exception("USB copy failed")
+            self.copy_failed.emit(ex)
+
+
+class UsbMoveWorker(QThread):
+    """Move/rename a remote file or directory via file_rename."""
+
+    move_completed = pyqtSignal()
+    move_failed = pyqtSignal(object)
+
+    def __init__(self, usbRC: UsbResponderClient, src: str, dst: str, parent=None):
+        super().__init__(parent)
+        self._usbRC = usbRC
+        self._src = src
+        self._dst = dst
+
+    def run(self):
+        try:
+            self._usbRC.file_rename(self._src, self._dst)
+            self.move_completed.emit()
+        except Exception as ex:
+            logger.exception("USB move failed")
+            self.move_failed.emit(ex)
+
+
+class UsbStatWorker(QThread):
+    """Get file/directory stat info."""
+
+    stat_completed = pyqtSignal(dict)
+    stat_failed = pyqtSignal(object)
+
+    def __init__(self, usbRC: UsbResponderClient, path: str, parent=None):
+        super().__init__(parent)
+        self._usbRC = usbRC
+        self._path = path
+
+    def run(self):
+        try:
+            info = self._usbRC.file_stat(self._path)
+            self.stat_completed.emit(info)
+        except Exception as ex:
+            logger.exception("USB stat failed")
+            self.stat_failed.emit(ex)
