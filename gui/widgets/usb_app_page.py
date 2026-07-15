@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
     QMessageBox,
+    QRadioButton,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -134,6 +136,9 @@ class UsbAppPage(QWidget):
         # Temp directory for app preview icons
         self._temp_dir = tempfile.mkdtemp(prefix="usb_app_icons_")
 
+        # Full app list cache for client-side filtering
+        self._full_app_list: list = []
+
         self._init_ui()
         self._connect_signals()
 
@@ -181,6 +186,27 @@ class UsbAppPage(QWidget):
         self.middleTitleLabel = CaptionLabel("远程应用")
         appLayout.addWidget(self.middleTitleLabel)
 
+        # Filter radio buttons
+        filterLayout = QHBoxLayout()
+        filterLayout.setContentsMargins(0, 0, 0, 0)
+        filterLayout.setSpacing(12)
+
+        self._filter_group = QButtonGroup(self)
+        self._radio_all = QRadioButton("全部")
+        self._radio_sys = QRadioButton("系统盘")
+        self._radio_data = QRadioButton("数据盘")
+        self._radio_all.setChecked(True)
+
+        self._filter_group.addButton(self._radio_all, 0)
+        self._filter_group.addButton(self._radio_sys, 1)
+        self._filter_group.addButton(self._radio_data, 2)
+
+        filterLayout.addWidget(self._radio_all)
+        filterLayout.addWidget(self._radio_sys)
+        filterLayout.addWidget(self._radio_data)
+        filterLayout.addStretch()
+        appLayout.addLayout(filterLayout)
+
         self.appDetailList = ListWidget()
         self.appDetailList.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         setCustomStyleSheet(
@@ -203,6 +229,7 @@ class UsbAppPage(QWidget):
         """Connect internal button signals"""
         self.btnRefreshList.clicked.connect(self._on_refresh_list)
         self.btnUploadLocal.clicked.connect(self._on_upload_local)
+        self._filter_group.idClicked.connect(self._on_filter_changed)
 
     # ------------------------------------------------------------------
     # Public API
@@ -214,6 +241,7 @@ class UsbAppPage(QWidget):
 
     def clear_app_list(self):
         """Clear the app list"""
+        self._full_app_list = []
         self.appDetailList.clear()
         self.middleTitleLabel.setText("远程应用")
 
@@ -265,22 +293,59 @@ class UsbAppPage(QWidget):
         self._list_worker.start()
 
     def _on_list_loaded(self, apps: list):
-        """App list loaded"""
+        """App list loaded — cache full list and render with current filter"""
+        self._full_app_list = apps
+        self._render_filtered_list()
+        self.controller.set_busy(False)
+
+    # ------------------------------------------------------------------
+    # Client-side filter
+    # ------------------------------------------------------------------
+
+    def _on_filter_changed(self, _id: int):
+        """Filter radio changed — re-render from cached list without re-fetching"""
+        if self.controller._is_busy:
+            return
+        self._render_filtered_list()
+
+    def _filter_apps(self) -> list:
+        """Return apps matching the currently selected filter."""
+        filter_id = self._filter_group.checkedId()
+        if filter_id == 1:
+            # 系统盘 only
+            return [a for a in self._full_app_list
+                    if (a.get("path") or "").startswith("/app/")]
+        elif filter_id == 2:
+            # 数据盘 only
+            return [a for a in self._full_app_list
+                    if (a.get("path") or "").startswith("/sd/")]
+        # 全部 (0 or fallback)
+        return self._full_app_list
+
+    def _render_filtered_list(self):
+        """Render the filtered app list into the ListWidget."""
+        apps = self._filter_apps()
         self.appDetailList.clear()
-        if not apps:
+        if not self._full_app_list:
             self.middleTitleLabel.setText("远程应用")
             placeholder = QListWidgetItem("设备端暂未返回应用信息。")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self.appDetailList.addItem(placeholder)
+        elif not apps:
+            self.middleTitleLabel.setText("远程应用（0 条匹配）")
+            placeholder = QListWidgetItem("当前筛选项下无匹配应用。")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.appDetailList.addItem(placeholder)
         else:
-            self.middleTitleLabel.setText(f"远程应用（总计：{len(apps)}）")
+            self.middleTitleLabel.setText(
+                f"远程应用（总计：{len(self._full_app_list)}，显示：{len(apps)}）"
+            )
             for app in apps:
                 widget = UsbAppListItemWidget(app, parent_page=self)
                 list_item = QListWidgetItem(self.appDetailList)
                 list_item.setSizeHint(widget.sizeHint())
                 self.appDetailList.addItem(list_item)
                 self.appDetailList.setItemWidget(list_item, widget)
-        self.controller.set_busy(False)
 
     def _on_list_failed(self, error):
         """App list load failed"""
