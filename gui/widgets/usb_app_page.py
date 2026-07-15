@@ -298,7 +298,7 @@ class UsbAppPage(QWidget):
     # ------------------------------------------------------------------
 
     def _on_upload_local(self):
-        """Local upload — read appconfig.json for uuid, upload to /app/{uuid}"""
+        """Local upload — read appconfig.json for uuid, ask disk target, upload."""
         ctrl = self.controller
         if ctrl._is_busy or not ctrl._is_connected:
             return
@@ -331,12 +331,28 @@ class UsbAppPage(QWidget):
             )
             return
 
+        name = epconfig.get("name", uuid)
+
+        # Ask user which disk to upload to
+        msg = QMessageBox(self)
+        msg.setWindowTitle("选择目标磁盘")
+        msg.setText(f"将应用「{name}」上传到：")
+        msg.addButton("系统盘  (/app)", QMessageBox.ButtonRole.AcceptRole)
+        btn_data = msg.addButton("数据盘  (/sd/app)", QMessageBox.ButtonRole.ApplyRole)
+        btn_cancel = msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked == btn_cancel or clicked is None:
+            return
+        base = "/sd/app" if clicked == btn_data else "/app"
+
         ctrl.set_busy(True)
         ctrl.progressBar.setVisible(True)
         ctrl.progressBar.setValue(0)
         ctrl.progressLabel.setText("正在上传...")
 
-        remote_path = f"/app/{uuid}"
+        remote_path = f"{base}/{uuid}"
         self._upload_worker = UsbUploadAssetWorker(
             ctrl.usbRC, path, remote_path, parent=self
         )
