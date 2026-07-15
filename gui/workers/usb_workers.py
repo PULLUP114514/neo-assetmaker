@@ -155,7 +155,8 @@ class UsbListOperatorsWorker(QThread):
         Returns the number of entries processed (for index tracking).
         """
         try:
-            _, dirs = self._usbRC.file_list(base)
+            _, dirs = self._suppress_disconnect(
+                self._usbRC, self._usbRC.file_list, base)
         except Exception:
             logger.warning("USB list %s failed (may not exist)", base)
             return 0
@@ -491,7 +492,8 @@ class UsbListAppsWorker(QThread):
         Returns the number of entries processed (for index tracking).
         """
         try:
-            _, dirs = self._usbRC.file_list(base)
+            _, dirs = self._suppress_disconnect(
+                self._usbRC, self._usbRC.file_list, base)
         except Exception:
             logger.warning("USB list %s failed (may not exist)", base)
             return 0
