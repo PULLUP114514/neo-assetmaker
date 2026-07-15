@@ -401,9 +401,12 @@ class UsbDeleteAssetWorker(QThread):
 
 
 class UsbListAppsWorker(QThread):
-    """Walk /app/ subdirectories, parse appconfig.json, and cache preview icons."""
+    """Walk /app/ and /sd/app/ subdirectories, parse appconfig.json, and cache preview icons."""
 
     _FALLBACK = "？？？（不合法缺省值）"
+
+    # Base paths to scan for apps (internal storage + data disk)
+    _APP_ROOTS = ["/app", "/sd/app"]
 
     list_completed = pyqtSignal(list)  # list of app data dicts
     list_failed = pyqtSignal(object)  # exception
@@ -429,13 +432,13 @@ class UsbListAppsWorker(QThread):
         finally:
             usbRC._disconnect_callback = saved
 
-    def _load_epconfig(self, dirname: str) -> dict:
-        """Download and parse /app/{dirname}/appconfig.json.
+    def _load_epconfig(self, base: str, dirname: str, idx: int) -> dict:
+        """Download and parse {base}/{dirname}/appconfig.json.
 
         Returns the parsed dict on success, or an empty dict on any failure.
         """
-        remote = f"/app/{dirname}/appconfig.json"
-        local = os.path.join(self._temp_dir, f"app_{dirname}_appconfig.json")
+        remote = f"{base}/{dirname}/appconfig.json"
+        local = os.path.join(self._temp_dir, f"app_{idx}_appconfig.json")
         try:
             self._suppress_disconnect(
                 self._usbRC, self._usbRC.file_get, remote, local)
@@ -445,14 +448,14 @@ class UsbListAppsWorker(QThread):
             logger.warning("Failed to load epconfig: %s", remote)
             return {}
 
-    def _download_icon(self, dirname: str, icon_filename: str, idx: int) -> str:
-        """Download icon from /app/{dirname}/{icon_filename} to temp dir.
+    def _download_icon(self, base: str, dirname: str, icon_filename: str, idx: int) -> str:
+        """Download icon from {base}/{dirname}/{icon_filename} to temp dir.
 
         Falls back to /root/res/defaulticon.png when icon_filename is empty.
         Returns the local path on success, or empty string on failure.
         """
         if icon_filename:
-            remote = f"/app/{dirname}/{icon_filename}"
+            remote = f"{base}/{dirname}/{icon_filename}"
         else:
             remote = "/root/res/defaulticon.png"
         local = os.path.join(self._temp_dir, f"app_{idx}_icon.png")
@@ -464,61 +467,59 @@ class UsbListAppsWorker(QThread):
             logger.warning("Failed to download icon: %s", remote)
             return ""
 
-    def run(self):
-        F = self._FALLBACK
-        apps: list = []
+    def _scan_root(self, base: str, apps: list, idx_offset: int) -> int:
+        """Scan one app root directory, append results to apps list.
 
-        # List /app/ subdirectories
+        Returns the number of entries processed (for index tracking).
+        """
         try:
-            _, dirs = self._usbRC.file_list("/app")
-        except Exception as ex:
-            logger.exception("USB list /app failed")
-            self.list_failed.emit(ex)
-            return
+            _, dirs = self._usbRC.file_list(base)
+        except Exception:
+            logger.warning("USB list %s failed (may not exist)", base)
+            return 0
 
         total = len(dirs)
+        count = 0
 
-        # Walk each subdirectory, parse appconfig.json and cache icon
         for i, dirname in enumerate(dirs):
-            # Skip non-app directories (hidden files, system dirs)
             if dirname.startswith("."):
                 continue
 
-            pct = int((i + 1) / max(total, 1) * 100)
-            self.progress_updated.emit(pct, f"加载: {dirname}")
+            idx = idx_offset + count
+            count += 1
 
-            info = self._load_epconfig(dirname)
+            pct = int((i + 1) / max(total, 1) * 100)
+            self.progress_updated.emit(pct, f"加载: {base}/{dirname}")
+
+            info = self._load_epconfig(base, dirname, idx)
             if not info:
-                # epconfig not found or unparseable — fill with defaults
                 apps.append({
-                    "name": F,
-                    "uuid": F,
-                    "version": F,
-                    "screen": F,
+                    "name": self._FALLBACK,
+                    "uuid": self._FALLBACK,
+                    "version": self._FALLBACK,
+                    "screen": self._FALLBACK,
                     "description": "",
-                    "path": f"/app/{dirname}",
-                    "delete_path": f"/app/{dirname}",
+                    "path": f"{base}/{dirname}",
+                    "delete_path": f"{base}/{dirname}",
                     "local_icon": "",
                     "is_dir": True,
                 })
                 continue
 
-            name = info.get("name") or F
-            uuid = info.get("uuid") or F
-            version = info.get("version", F)
-            screen = info.get("screen") or F
+            name = info.get("name") or self._FALLBACK
+            uuid = info.get("uuid") or self._FALLBACK
+            version = info.get("version", self._FALLBACK)
+            screen = info.get("screen") or self._FALLBACK
             icon_filename = info.get("icon", "")
 
-            # Build description text
             desc_parts = []
-            if version != F:
+            if version != self._FALLBACK:
                 desc_parts.append(f"版本: {version}")
-            if screen != F:
+            if screen != self._FALLBACK:
                 desc_parts.append(f"分辨率: {screen}")
-            description = "  |  ".join(desc_parts) if desc_parts else F
+            description = "  |  ".join(desc_parts) if desc_parts else self._FALLBACK
 
-            # Download icon
-            local_icon = self._download_icon(dirname, icon_filename, i)
+            local_icon = self._download_icon(base, dirname, icon_filename, idx)
 
             apps.append({
                 "name": name,
@@ -526,11 +527,29 @@ class UsbListAppsWorker(QThread):
                 "version": version,
                 "screen": screen,
                 "description": description,
-                "path": f"/app/{dirname}",
-                "delete_path": f"/app/{dirname}",
+                "path": f"{base}/{dirname}",
+                "delete_path": f"{base}/{dirname}",
                 "local_icon": local_icon,
                 "is_dir": True,
             })
+
+        return count
+
+    def run(self):
+        apps: list = []
+
+        # /app is mandatory — fail early if it can't be listed
+        try:
+            self._usbRC.file_list("/app")
+        except Exception as ex:
+            logger.exception("USB list /app failed")
+            self.list_failed.emit(ex)
+            return
+
+        idx_offset = 0
+        for base in self._APP_ROOTS:
+            processed = self._scan_root(base, apps, idx_offset)
+            idx_offset += processed
 
         self.list_completed.emit(apps)
 

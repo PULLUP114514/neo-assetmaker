@@ -356,6 +356,7 @@ class UsbAppPage(QWidget):
             position=InfoBarPosition.TOP,
             duration=4000,
         )
+        self._reload_apps_and_refresh()
 
     def _on_upload_failed(self, error):
         """Upload failed"""
