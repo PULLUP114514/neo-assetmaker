@@ -69,9 +69,21 @@ class UsbListAssetsWorker(QThread):
         self._usbRC = usbRC
         self._path = path
 
+    @staticmethod
+    def _suppress_disconnect(usbRC, func, *args, **kwargs):
+        """Temporarily suppress disconnect_callback so file_list errors
+        only surface via list_failed, not as a duplicate control-page popup."""
+        saved = usbRC._disconnect_callback
+        usbRC._disconnect_callback = None
+        try:
+            return func(*args, **kwargs)
+        finally:
+            usbRC._disconnect_callback = saved
+
     def run(self):
         try:
-            files, dirs = self._usbRC.file_list(self._path)
+            files, dirs = self._suppress_disconnect(
+                self._usbRC, self._usbRC.file_list, self._path)
             self.list_completed.emit(files, dirs)
         except Exception as ex:
             logger.exception("USB list assets failed")
