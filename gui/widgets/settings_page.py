@@ -4,10 +4,9 @@
 
 import os
 import logging
-
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QRegularExpressionValidator
+from PyQt6.QtCore import Qt, pyqtSignal, QRegularExpression
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
-
 from qfluentwidgets import (
     InfoBar,
     InfoBarPosition,
@@ -167,6 +166,44 @@ class SettingsPage(QWidget):
             self.remoteAutoRestartProgram,
         ])
 
+        self.usbControler = SettingCardGroup(
+            "USB ePass 设备管理器", self.scrollWidget)
+        # USB VID
+        self.usbControlerVID = LineEditSettingCard(
+            FluentIcon.SETTING,
+            "USB VID",
+            "输入 USB Vendor ID（4位HEX，默认1d6b）"
+        )
+        self.usbControlerVID.lineEdit.setPlaceholderText("1d6b")
+        self.usbControlerVID.lineEdit.setText("0203")
+        self.usbControlerVID.lineEdit.setValidator(
+            QRegularExpressionValidator(
+                QRegularExpression("[0-9A-Fa-f]{0,4}")
+            )
+        )
+        # USB PID
+        self.usbControlerPID = LineEditSettingCard(
+            FluentIcon.SETTING,
+            "USB PID",
+            "输入 USB Product ID（4位HEX，默认0203）"
+        )
+        self.usbControlerPID.lineEdit.setPlaceholderText("5678")
+        self.usbControlerPID.lineEdit.setText("5678")
+        self.usbControlerPID.lineEdit.setValidator(
+            QRegularExpressionValidator(
+                QRegularExpression("[0-9A-Fa-f]{0,4}")
+            )
+        )
+        self.usbControlerAutoRestartProgram = SwitchSettingCard(
+            FluentIcon.SYNC,
+            "USB 上传完毕后自动重启 DrmApp",
+            parent=self.usbControler)
+        self.usbControler.addSettingCards([
+            self.usbControlerVID,
+            self.usbControlerPID,
+            self.usbControlerAutoRestartProgram,
+        ])
+
         self.aboutGroup = SettingCardGroup("关于", self.scrollWidget)
 
         self.shortcutsCard = PushSettingCard(
@@ -188,7 +225,7 @@ class SettingsPage(QWidget):
             self.shortcutsCard, self.updateCard, self.aboutCard])
 
         for group in [self.appGroup, self.uiGroup, self.personalGroup,
-                      self.videoGroup, self.networkGroup, self.autoUploadGroup, self.aboutGroup]:
+                      self.videoGroup, self.networkGroup, self.autoUploadGroup, self.usbControler, self.aboutGroup]:
             self.scrollLayout.addWidget(group)
 
         self.scrollLayout.addStretch(1)
@@ -235,6 +272,13 @@ class SettingsPage(QWidget):
         self.remoteAutoRestartProgram.checkedChanged.connect(
             lambda v: self._emit('remote_auto_restart_program', v))
         self.rndisTestCard.clicked.connect(self._on_test_rndis_connection)
+
+        self.usbControlerVID.textChanged.connect(
+            lambda v: self._emit('usb_controler_vid', v))
+        self.usbControlerPID.textChanged.connect(
+            lambda v: self._emit('usb_controler_pid', v))
+        self.usbControlerAutoRestartProgram.checkedChanged.connect(
+            lambda v: self._emit('usb_controler_auto_restart_program', v))
 
         self.shortcutsCard.clicked.connect(self.show_shortcuts_requested)
         self.updateCard.clicked.connect(self.check_update_requested)
@@ -289,6 +333,13 @@ class SettingsPage(QWidget):
                     settings.get('ssh_auto_restart_program', True),
                 )
             )
+
+            self.usbControlerVID.setText(
+                settings.get('usb_controler_vid', False))
+            self.usbControlerPID.setText(
+                settings.get('usb_controler_pid', False))
+            self.usbControlerAutoRestartProgram.setChecked(
+                settings.get('usb_controler_auto_restart_program', False))
         finally:
             self._loading = False
 
@@ -300,8 +351,10 @@ class SettingsPage(QWidget):
 
         self.rndisTestCard.setEnabled(False)
         self._rndis_test_worker = RndisConnectWorker(parent=self)
-        self._rndis_test_worker.connect_succeeded.connect(self._on_rndis_test_success)
-        self._rndis_test_worker.connect_failed.connect(self._on_rndis_test_failed)
+        self._rndis_test_worker.connect_succeeded.connect(
+            self._on_rndis_test_success)
+        self._rndis_test_worker.connect_failed.connect(
+            self._on_rndis_test_failed)
         self._rndis_test_worker.start()
 
     def _on_rndis_test_success(self, data: dict):

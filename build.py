@@ -474,6 +474,7 @@ def run_cxfreeze(skip_flasher=False, source_root=None):
         "keyring",
         "keyring.backends",
         "platformdirs",
+        "usb",
         "fido2",
         "fido2.hid",
         "fido2.client",
