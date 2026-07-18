@@ -76,6 +76,10 @@ class MainWindow(QMainWindow):
         self._crash_recovery_service = CrashRecoveryService()
         self._crash_recovery_service.initialize(
             os.path.join(self._app_dir, ".recovery"))
+        # Register every autosave with crash-recovery. AutoSaveService writes backups to
+        # <project>/.autosave (or the temp dir) while CrashRecoveryService only scans
+        # <app>/.recovery — without this pointer nothing is recoverable after a crash.
+        self._auto_save_service.saved.connect(self._on_autosave_saved)
 
         self._error_handler = ErrorHandler()
         self._error_handler.error_occurred.connect(self._on_error_occurred)
@@ -1002,6 +1006,18 @@ class MainWindow(QMainWindow):
             settings = QSettings("ArknightsPassMaker", "MainWindow")
             settings.setValue("show_announcement", False)
 
+    def _on_autosave_saved(self, backup_path: str):
+        """Write a crash-recovery pointer for each autosave so it can be found later."""
+        try:
+            project_path = self._project_path or None
+            self._crash_recovery_service.save_recovery_info(
+                backup_path,
+                project_path=project_path,
+                is_temp=not project_path,
+            )
+        except Exception as exc:
+            logger.error(f"注册崩溃恢复信息失败: {exc}")
+
     def _init_temp_project(self):
         """创建临时项目，用户可立即开始编辑"""
         temp_dir = tempfile.mkdtemp(prefix="neo_assetmaker_")
@@ -1344,16 +1360,23 @@ class MainWindow(QMainWindow):
             show_error(e, "收集导出数据", self)
             return
 
+        # These write side-car assets (class_icon.png / ark_logo.png / overlay.png) that
+        # the exported epconfig.json references. If they fail we must NOT continue to
+        # export_all, or the run would report "导出成功" while the referenced files are
+        # missing — abort so the failure is visible.
         try:
             self._process_arknights_custom_images(dir_path)
         except Exception as e:
             logger.error(f"处理自定义图片失败: {e}")
             show_error(e, "处理自定义图片", self)
+            return
 
         try:
             self._process_image_overlay(dir_path)
         except Exception as e:
             logger.error(f"处理 ImageOverlay 失败: {e}")
+            show_error(e, "处理 ImageOverlay", self)
+            return
 
         from core.export_service import ExportService
         from gui.dialogs.export_progress_dialog import ExportProgressDialog
@@ -3658,6 +3681,13 @@ class MainWindow(QMainWindow):
             if loop_image_path and os.path.exists(loop_image_path):
                 data['loop_image_path'] = loop_image_path
                 data['is_loop_image'] = True
+            else:
+                # The loop asset is required. Fail loudly (caught by _on_export's
+                # try/except -> show_error + return) instead of silently dropping it and
+                # exporting an epconfig.json that references a loop.mp4 that never gets made.
+                raise FileNotFoundError(
+                    f"循环素材(图片)缺失或不存在: {loop_image_path or self._config.loop.file!r}"
+                )
         elif self._config.loop.file:
             loop_state = self._collect_preview_media_state(
                 self.video_preview,
