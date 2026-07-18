@@ -122,6 +122,8 @@ class VideoPreviewWidget(QWidget):
         self._mpv_ipc_server = ""
         self._mpv_ipc_attempts = 0  # async IPC-connect retry counter
         self._mpv_ipc_connected = False  # True once the IPC socket has connected
+        self._pending_mpv_cmds: list = []  # commands issued before the socket connected
+        self._mpv_read_buf = b""  # partial JSON-IPC line buffer
         self._media_toolchain = MediaToolchain.discover()
         self._has_video = False
         self._loop_frame: Optional[np.ndarray] = None
@@ -230,9 +232,14 @@ class VideoPreviewWidget(QWidget):
             logger.debug("mpv shutdown failed: %s", exc)
 
     def _send_mpv_command(self, command: list):
-        if self._mpv_socket is None:
-            return
-        if self._mpv_socket.state() != QLocalSocket.LocalSocketState.ConnectedState:
+        if self._mpv_socket is None or \
+                self._mpv_socket.state() != QLocalSocket.LocalSocketState.ConnectedState:
+            # Not connected yet: queue so an early seek/pause/rotate issued during the
+            # async connect window isn't silently lost. Bound the queue so a mpv that
+            # never connects can't grow it without limit.
+            if self._mpv_process is not None:
+                self._pending_mpv_cmds.append(command)
+                del self._pending_mpv_cmds[:-32]
             return
         payload = json.dumps({"command": command}, separators=(",", ":"))
         self._mpv_socket.write((payload + "\n").encode("utf-8"))
@@ -288,6 +295,8 @@ class VideoPreviewWidget(QWidget):
         logger.debug("mpv process started, connecting IPC...")
         self._mpv_ipc_attempts = 0
         self._mpv_ipc_connected = False
+        self._pending_mpv_cmds = []
+        self._mpv_read_buf = b""
         self._try_mpv_ipc_connect()
 
     def _try_mpv_ipc_connect(self):
@@ -302,11 +311,50 @@ class VideoPreviewWidget(QWidget):
         socket.connectToServer(self._mpv_ipc_server)
 
     def _on_mpv_ipc_connected(self):
-        """IPC 连接成功，应用旋转设置。"""
+        """IPC 连接成功：开始观察播放位置、补发排队命令、应用旋转。"""
         logger.info("mpv IPC connected after %d attempt(s)", self._mpv_ipc_attempts)
         self._mpv_ipc_connected = True
+        # Read mpv's replies/events so we can track the real playback position.
+        if self._mpv_socket is not None:
+            self._mpv_socket.readyRead.connect(self._on_mpv_readable)
+        self._mpv_read_buf = b""
+        self._send_mpv_command(["observe_property", 1, "time-pos"])
         if self._rotation:
             self._send_mpv_command(["set_property", "video-rotate", self._rotation])
+        # Flush commands that were queued before the socket connected (early seek/pause).
+        pending, self._pending_mpv_cmds = self._pending_mpv_cmds, []
+        for cmd in pending:
+            self._send_mpv_command(cmd)
+
+    def _on_mpv_readable(self):
+        """Drain mpv JSON-IPC lines and dispatch them (Pc: time-pos observation)."""
+        if self._mpv_socket is None:
+            return
+        self._mpv_read_buf += bytes(self._mpv_socket.readAll())
+        while b"\n" in self._mpv_read_buf:
+            raw, self._mpv_read_buf = self._mpv_read_buf.split(b"\n", 1)
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                msg = json.loads(raw.decode("utf-8", "replace"))
+            except (ValueError, TypeError):
+                continue
+            self._handle_mpv_message(msg)
+
+    def _handle_mpv_message(self, msg: dict):
+        """Handle one parsed mpv IPC message; drive the frame counter from time-pos."""
+        if not isinstance(msg, dict):
+            return
+        if msg.get("event") == "property-change" and msg.get("name") == "time-pos":
+            data = msg.get("data")
+            if isinstance(data, (int, float)) and self.video_fps > 0:
+                idx = int(round(data * self.video_fps))
+                idx = max(0, min(idx, max(0, self.total_frames - 1)))
+                if idx != self.current_frame_index:
+                    self.current_frame_index = idx
+                    self.frame_changed.emit(idx)
+                    self._update_info_label()
 
     def _on_mpv_ipc_error(self, _err):
         """IPC socket 出错：区分"从未连上(重试)"与"连上后断开(mpv 正常退出，勿重试)"。"""
@@ -587,6 +635,10 @@ class VideoPreviewWidget(QWidget):
 
     def _on_timer_tick(self):
         if not (self._has_video or self._loop_frame is not None):
+            return
+        # When mpv is playing, the frame index is driven by observed time-pos
+        # (_handle_mpv_message), so don't also free-run the counter here (drift).
+        if self._mpv_process is not None:
             return
         self.current_frame_index += 1
         if self.current_frame_index >= max(1, self.total_frames):
