@@ -138,13 +138,17 @@ class ImageProcessor:
         h, w = img.shape[:2]
 
         if not keep_aspect:
-            return cv2.resize(img, (target_width, target_height))
+            # INTER_AREA is the recommended filter for shrinking (avoids aliasing);
+            # INTER_LINEAR for enlarging (OpenCV resize docs).
+            interp = cv2.INTER_AREA if (target_width < w or target_height < h) else cv2.INTER_LINEAR
+            return cv2.resize(img, (target_width, target_height), interpolation=interp)
 
         scale = max(target_width / w, target_height / h)
         new_w = int(w * scale)
         new_h = int(h * scale)
 
-        resized = cv2.resize(img, (new_w, new_h))
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        resized = cv2.resize(img, (new_w, new_h), interpolation=interp)
 
         start_x = (new_w - target_width) // 2
         start_y = (new_h - target_height) // 2

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -118,7 +119,9 @@ def write_vpy_script(script_path: str | os.PathLike[str], params) -> None:
     start_frame = max(0, int(params.start_frame))
     end_frame = max(start_frame, int(params.end_frame))
     crop_x, crop_y, crop_w, crop_h = [max(0, int(v)) for v in params.cropbox]
-    rotation = int(params.rotation) % 360
+    # Snap rotation to a cardinal angle so export can never diverge from the preview
+    # (which rotates via cv2.ROTATE_*). Idempotent; keeps existing saved projects working.
+    rotation = (round(int(params.rotation) / 90) * 90) % 360
 
     lines = [
         "import vapoursynth as vs",
@@ -140,25 +143,38 @@ def write_vpy_script(script_path: str | os.PathLike[str], params) -> None:
                 f"clip = clip[{start_frame}:{end_frame}]",
             ]
         )
+        # Match cv2.ROTATE_* used by the preview (video_preview.py). core.std.Transpose
+        # is a matrix transpose (reflection across the main diagonal), NOT a rotation:
+        # a true 90deg clockwise = Transpose then FlipHorizontal; 270deg (counter-
+        # clockwise) = Transpose then FlipVertical; 180deg == Turn180. rotation is already
+        # snapped to {0,90,180,270} above, so no arbitrary-angle branch is needed.
         if rotation == 90:
-            lines.append("clip = core.std.Transpose(clip)")
+            lines.append("clip = core.std.FlipHorizontal(core.std.Transpose(clip))")
         elif rotation == 180:
             lines.append("clip = core.std.Turn180(clip)")
         elif rotation == 270:
-            lines.append("clip = core.std.Transpose(core.std.Turn180(clip))")
-        elif rotation != 0:
-            lines.append("# Arbitrary-angle rotation is not supported by the bundled VapourSynth v1 script.")
+            lines.append("clip = core.std.FlipVertical(core.std.Transpose(clip))")
 
         if crop_w > 0 and crop_h > 0:
-            # 使用 CropAbs 函数，参数必须是整数常量（VapourSynth 要求）
-            lines.append(
-                "clip = core.std.CropAbs("
-                f"clip, width={crop_w}, height={crop_h}, "
-                f"left={crop_x}, top={crop_y})"
-            )
+            # Clamp the crop box to the ACTUAL post-rotation clip dimensions at eval
+            # time and force every value even. VapourSynth CropAbs on a YUV420 (4:2:0)
+            # clip rejects odd offsets/sizes AND a box extending past the frame; either
+            # aborts the whole encode. Computing it against clip.width/height in the
+            # script keeps it correct regardless of source size or rotation.
+            lines.append(f"_cx = min(max(0, {crop_x}), clip.width - 2) & ~1")
+            lines.append(f"_cy = min(max(0, {crop_y}), clip.height - 2) & ~1")
+            lines.append(f"_cw = min({crop_w}, clip.width - _cx) & ~1")
+            lines.append(f"_ch = min({crop_h}, clip.height - _cy) & ~1")
+            lines.append("if _cw >= 2 and _ch >= 2:")
+            lines.append("    clip = core.std.CropAbs(clip, width=_cw, height=_ch, left=_cx, top=_cy)")
 
+    # The image branch feeds an RGB24 clip here; RGB->YUV requires a colour matrix or
+    # VapourSynth raises "Matrix must be specified" and the whole image-loop export fails.
+    # The video branch is already YUV, where matrix_s must NOT be passed.
+    _resize_matrix = ", matrix_s='709'" if params.is_image else ""
     lines.append(
-        f"clip = core.resize.Bicubic(clip, width={target_w}, height={target_h}, format=vs.YUV420P8)"
+        f"clip = core.resize.Bicubic(clip, width={target_w}, height={target_h}, "
+        f"format=vs.YUV420P8{_resize_matrix})"
     )
 
     if padding_side == "right":
@@ -257,7 +273,6 @@ class MediaEncoder:
         x264_cmd = build_x264_command(self.toolchain.x264_path, output_path)
         env = build_media_subprocess_env(self.toolchain.vspipe_path)
         popen_kwargs = {
-            "stderr": subprocess.PIPE,
             "env": env,
             "creationflags": subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         }
@@ -265,19 +280,48 @@ class MediaEncoder:
             popen_kwargs.pop("creationflags")
 
         with _suppress_windows_error_dialogs():
-            vspipe = subprocess.Popen(vspipe_cmd, stdout=subprocess.PIPE, **popen_kwargs)
+            vspipe = subprocess.Popen(
+                vspipe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs
+            )
             x264 = subprocess.Popen(
                 x264_cmd,
                 stdin=vspipe.stdout,
-                stdout=subprocess.PIPE,
+                # x264 writes the H.264 bitstream to its --output file; its stdout is
+                # unused. Piping it to an unread PIPE was pure deadlock surface -> DEVNULL.
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 **popen_kwargs,
             )
         if vspipe.stdout is not None:
             vspipe.stdout.close()
         self.active_processes = [vspipe, x264]
 
-        x264_stderr = b""
-        vspipe_stderr = b""
+        # Drain both children's stderr concurrently in background threads. vspipe emits
+        # per-frame progress and x264 (veryslow) prints periodic progress to stderr; on a
+        # long encode a full OS pipe buffer blocks the writing child, which stalls the
+        # pipeline and hangs the poll loop below. The Python subprocess docs warn that a
+        # poll/wait loop with unread PIPEs deadlocks — reader threads are the fix.
+        stderr_bufs: dict[str, bytes] = {}
+
+        def _drain(proc, key):
+            try:
+                stderr_bufs[key] = proc.stderr.read() if proc.stderr is not None else b""
+            except Exception:
+                stderr_bufs[key] = b""
+            finally:
+                try:
+                    if proc.stderr is not None:
+                        proc.stderr.close()
+                except Exception:
+                    pass
+
+        readers = [
+            threading.Thread(target=_drain, args=(vspipe, "vspipe"), daemon=True),
+            threading.Thread(target=_drain, args=(x264, "x264"), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+
         try:
             while x264.poll() is None:
                 if is_cancelled and is_cancelled():
@@ -286,14 +330,15 @@ class MediaEncoder:
                         os.remove(output_path)
                     raise InterruptedError("Export cancelled")
                 time.sleep(0.1)
-            _stdout, x264_stderr = x264.communicate(timeout=5)
-            vspipe_stderr_pipe = getattr(vspipe, "stderr", None)
-            if vspipe_stderr_pipe is not None:
-                vspipe_stderr = vspipe_stderr_pipe.read()
             vspipe.wait(timeout=5)
         finally:
             self.terminate_active_processes()
 
+        for reader in readers:
+            reader.join(timeout=5)
+
+        vspipe_stderr = stderr_bufs.get("vspipe", b"")
+        x264_stderr = stderr_bufs.get("x264", b"")
         return {
             "vspipe_returncode": int(vspipe.returncode or 0),
             "x264_returncode": int(x264.returncode or 0),
