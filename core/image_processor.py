@@ -90,9 +90,14 @@ class ImageProcessor:
             if HAS_CV2:
                 ext = os.path.splitext(path)[1] or '.png'
                 success, encoded = cv2.imencode(ext, img)
-                if success:
-                    with open(path, 'wb') as f:
-                        f.write(encoded.tobytes())
+                if not success:
+                    # cv2.imencode returns success=False on encode failure (e.g.
+                    # unsupported extension); no file is written, so report failure
+                    # instead of claiming success.
+                    logger.error("保存图片失败: cv2.imencode 编码失败 (ext=%s)", ext)
+                    return False
+                with open(path, 'wb') as f:
+                    f.write(encoded.tobytes())
             elif HAS_PIL:
                 if img.shape[-1] == 4:
                     img_rgb = img[:, :, [2, 1, 0, 3]]

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 from concurrent.futures import Future, ThreadPoolExecutor
-from functools import lru_cache
 from threading import Lock
 from typing import Callable, Optional
 
@@ -34,7 +33,6 @@ class OptimizedVideoProcessor:
         self._cache = {}
         self._cache_order = []
 
-    @lru_cache(maxsize=32)
     def process_frame(self, frame_path: str, timestamp: float) -> Optional[np.ndarray]:
         try:
             frame = cv2.imread(frame_path)

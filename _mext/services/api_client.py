@@ -282,6 +282,13 @@ class ApiClient:
             if response.status_code not in (200, 206):
                 raise ApiError(response.status_code, "Download failed")
 
+            # A 200 in response to a Range request means the server ignored the
+            # range and is sending the full body (RFC 7233). Restart from scratch
+            # instead of appending to the partial temp file, which would corrupt it
+            # (this method has no hash check, so the corruption would be silent).
+            if resume_from > 0 and response.status_code == 200:
+                resume_from = 0
+
             total_size = int(response.headers.get("content-length", 0))
             if resume_from > 0 and total_size > 0:
                 total_size += resume_from

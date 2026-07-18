@@ -166,6 +166,20 @@ class DownloadWorker(QRunnable):
                 if response.status_code not in (200, 206):
                     raise RuntimeError(f"Server returned HTTP {response.status_code}")
 
+                # We requested a range (resume) but the server answered 200, which
+                # per RFC 7233 means it ignored Range and is sending the FULL body.
+                # Appending it to the existing partial bytes would corrupt the file,
+                # so restart from scratch: truncate, reset counters and hasher.
+                if self._resume_offset > 0 and response.status_code == 200:
+                    logger.info(
+                        "Download %s: server ignored Range (HTTP 200); restarting from 0",
+                        self.task_id,
+                    )
+                    mode = "wb"
+                    downloaded = 0
+                    hasher = hashlib.sha256()
+                    self._resume_offset = 0
+
                 total_size = int(response.headers.get("content-length", 0))
                 if self._resume_offset > 0 and total_size > 0:
                     total_size += self._resume_offset
