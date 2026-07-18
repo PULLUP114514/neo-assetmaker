@@ -255,6 +255,25 @@ class UsbAppPage(QWidget):
             if widget:
                 widget.set_buttons_enabled(enabled)
 
+    def _track_worker(self, worker):
+        """Dispose a finished background worker so parented QThreads don't pile up.
+
+        Qt only frees child QObjects when the parent (this page) is destroyed, so
+        each finished per-operation worker would otherwise leak for the page's
+        lifetime. Connect QThread.finished -> deleteLater and drop our reference.
+        """
+        def _cleanup():
+            for attr in (
+                "_list_worker", "_upload_worker", "_download_worker",
+                "_delete_worker", "_reload_worker",
+            ):
+                if getattr(self, attr, None) is worker:
+                    setattr(self, attr, None)
+            worker.deleteLater()
+
+        worker.finished.connect(_cleanup)
+        return worker
+
     def shutdown(self):
         """Wait for all background workers and clean up temp directory"""
         for worker in [
@@ -290,6 +309,7 @@ class UsbAppPage(QWidget):
         self._list_worker.progress_updated.connect(self._on_task_progress)
         self._list_worker.list_completed.connect(self._on_list_loaded)
         self._list_worker.list_failed.connect(self._on_list_failed)
+        self._track_worker(self._list_worker)
         self._list_worker.start()
 
     def _on_list_loaded(self, apps: list):
@@ -424,6 +444,7 @@ class UsbAppPage(QWidget):
         self._upload_worker.progress_updated.connect(self._on_task_progress)
         self._upload_worker.upload_completed.connect(self._on_upload_done)
         self._upload_worker.upload_failed.connect(self._on_upload_failed)
+        self._track_worker(self._upload_worker)
         self._upload_worker.start()
 
     def _on_upload_done(self, remote_path: str):
@@ -485,6 +506,7 @@ class UsbAppPage(QWidget):
         )
         self._delete_worker.delete_completed.connect(self._on_delete_done)
         self._delete_worker.delete_failed.connect(self._on_delete_failed)
+        self._track_worker(self._delete_worker)
         self._delete_worker.start()
 
     def _on_delete_done(self, path: str):
@@ -521,6 +543,7 @@ class UsbAppPage(QWidget):
         )
         self._reload_worker.reload_succeeded.connect(self._on_reload_done)
         self._reload_worker.reload_failed.connect(self._on_reload_failed)
+        self._track_worker(self._reload_worker)
         self._reload_worker.start()
 
     def _on_reload_done(self):
@@ -569,6 +592,7 @@ class UsbAppPage(QWidget):
         self._download_worker.download_completed.connect(
             self._on_download_done)
         self._download_worker.download_failed.connect(self._on_download_failed)
+        self._track_worker(self._download_worker)
         self._download_worker.start()
 
     def _on_download_done(self, local_path: str):

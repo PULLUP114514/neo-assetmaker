@@ -7,7 +7,6 @@ import os
 import json
 import sys
 import tempfile
-import time
 import uuid
 from typing import Optional, Tuple, TYPE_CHECKING
 
@@ -36,10 +35,14 @@ from qfluentwidgets import CaptionLabel, setCustomStyleSheet
 
 from core.media_tools import MediaToolchain
 from core.video_processor import VideoProcessor
-from gui.workers.mpv_launch_worker import MpvLaunchWorker
 
 if TYPE_CHECKING:
     from config.epconfig import EPConfig
+
+# mpv JSON-IPC connection retry budget. The connect is driven asynchronously on
+# the GUI thread via QTimer, so these never block the UI.
+_MPV_IPC_MAX_ATTEMPTS = 100
+_MPV_IPC_RETRY_MS = 100
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +120,7 @@ class VideoPreviewWidget(QWidget):
         self._mpv_process: Optional[QProcess] = None
         self._mpv_socket: Optional[QLocalSocket] = None
         self._mpv_ipc_server = ""
-        self._mpv_launch_worker: Optional[MpvLaunchWorker] = None  # 新增：Worker 引用
+        self._mpv_ipc_attempts = 0  # async IPC-connect retry counter
         self._media_toolchain = MediaToolchain.discover()
         self._has_video = False
         self._loop_frame: Optional[np.ndarray] = None
@@ -199,34 +202,31 @@ class VideoPreviewWidget(QWidget):
         self._has_video = False
 
     def _stop_mpv_process(self):
-        # 停止正在运行的 Worker
-        if self._mpv_launch_worker is not None:
-            if self._mpv_launch_worker.isRunning():
-                self._mpv_launch_worker.cleanup()
-                self._mpv_launch_worker.wait(1000)
-            self._mpv_launch_worker.deleteLater()
-            self._mpv_launch_worker = None
-
+        # QProcess/QLocalSocket are owned by the GUI thread and torn down here.
+        socket = self._mpv_socket
         process = self._mpv_process
-        if process is None:
-            return
+        # Best-effort graceful quit while the socket is still connected.
+        if socket is not None and socket.state() == QLocalSocket.LocalSocketState.ConnectedState:
+            try:
+                self._send_mpv_command(["quit"])
+            except Exception:
+                pass
+        self._mpv_socket = None
         self._mpv_process = None
         try:
-            if self._mpv_socket is not None:
-                self._send_mpv_command(["quit"])
-                self._mpv_socket.disconnectFromServer()
-                self._mpv_socket.deleteLater()
-                self._mpv_socket = None
-            if process.state() != QProcess.ProcessState.NotRunning:
-                process.waitForFinished(3000)
-            if process.state() != QProcess.ProcessState.NotRunning:
-                process.kill()
-                process.waitForFinished(3000)
+            if socket is not None:
+                socket.disconnectFromServer()
+                socket.abort()
+                socket.deleteLater()
+            if process is not None:
+                if process.state() != QProcess.ProcessState.NotRunning:
+                    process.waitForFinished(3000)
+                if process.state() != QProcess.ProcessState.NotRunning:
+                    process.kill()
+                    process.waitForFinished(3000)
+                process.deleteLater()
         except Exception as exc:
             logger.debug("mpv shutdown failed: %s", exc)
-        finally:
-            if process.state() == QProcess.ProcessState.NotRunning:
-                process.deleteLater()
 
     def _send_mpv_command(self, command: list):
         if self._mpv_socket is None:
@@ -271,52 +271,67 @@ class VideoPreviewWidget(QWidget):
             args.extend(["--force-window=yes", f"--wid={mpv_window_id}"])
         args.append(path)
 
-        # 创建并启动 Worker（在后台线程中启动 mpv）
-        self._mpv_launch_worker = MpvLaunchWorker(
-            self._media_toolchain.mpv_path,
-            args,
-            self._mpv_ipc_server,
-            parent=self
-        )
-        self._mpv_launch_worker.launched.connect(self._on_mpv_launched)
-        self._mpv_launch_worker.failed.connect(self._on_mpv_launch_failed)
-        self._mpv_launch_worker.start()
+        # 在 GUI 线程创建 QProcess（正确的线程亲和），用信号异步驱动启动。
+        # 不再放到工作线程里：QProcess/QLocalSocket 只能在其所属线程使用，且
+        # 其事件驱动 I/O 与 deleteLater 依赖所属线程的事件循环。
+        self._mpv_process = QProcess(self)
+        self._mpv_process.errorOccurred.connect(self._on_mpv_process_error)
+        self._mpv_process.started.connect(self._on_mpv_process_started)
+        self._mpv_process.start(self._media_toolchain.mpv_path, args)
 
-        # 立即返回 True，实际结果通过信号异步通知
-        # 注意：load_video 的调用者需要适配这个异步行为
+        # 立即返回 True，实际结果通过 started / IPC 连接信号异步通知
         return True
 
-    def _on_mpv_launched(self):
-        """mpv 成功启动并连接 IPC（Worker 信号回调）"""
-        logger.info("mpv launched successfully via worker")
+    def _on_mpv_process_started(self):
+        """mpv 进程已启动 → 开始异步连接其 JSON IPC 服务器。"""
+        logger.debug("mpv process started, connecting IPC...")
+        self._mpv_ipc_attempts = 0
+        self._try_mpv_ipc_connect()
 
-        # 从 Worker 获取进程和套接字引用
-        if self._mpv_launch_worker:
-            self._mpv_process = self._mpv_launch_worker.process
-            self._mpv_socket = self._mpv_launch_worker.socket
+    def _try_mpv_ipc_connect(self):
+        """尝试连接 mpv 的 IPC 服务器；失败则用 QTimer 异步重试（不阻塞 UI）。"""
+        if self._mpv_process is None:
+            return  # 已被 _stop_mpv_process 取消
+        self._mpv_ipc_attempts += 1
+        socket = QLocalSocket(self)
+        self._mpv_socket = socket
+        socket.connected.connect(self._on_mpv_ipc_connected)
+        socket.errorOccurred.connect(self._on_mpv_ipc_error)
+        socket.connectToServer(self._mpv_ipc_server)
 
-        # 应用旋转设置
+    def _on_mpv_ipc_connected(self):
+        """IPC 连接成功，应用旋转设置。"""
+        logger.info("mpv IPC connected after %d attempt(s)", self._mpv_ipc_attempts)
         if self._rotation:
             self._send_mpv_command(["set_property", "video-rotate", self._rotation])
 
-        # Worker 完成任务，可以清理引用
-        if self._mpv_launch_worker:
-            self._mpv_launch_worker.deleteLater()
-            self._mpv_launch_worker = None
+    def _on_mpv_ipc_error(self, _err):
+        """本次 IPC 连接失败：丢弃该 socket，在预算内异步重试。"""
+        socket = self._mpv_socket
+        if socket is not None:
+            socket.abort()
+            socket.deleteLater()
+            self._mpv_socket = None
+        if self._mpv_process is None:
+            return  # 已停止
+        if self._mpv_ipc_attempts >= _MPV_IPC_MAX_ATTEMPTS:
+            self._on_mpv_launch_failed("mpv IPC connection failed after multiple attempts")
+            return
+        QTimer.singleShot(_MPV_IPC_RETRY_MS, self._try_mpv_ipc_connect)
+
+    def _on_mpv_process_error(self, error):
+        """QProcess 层错误。只有启动失败才当作 launch 失败，避免停止时的误报。"""
+        if self._mpv_process is None:
+            return  # 停止过程中，忽略
+        if error == QProcess.ProcessError.FailedToStart:
+            self._on_mpv_launch_failed(f"mpv failed to start: {self._mpv_process.errorString()}")
 
     def _on_mpv_launch_failed(self, error_msg: str):
-        """mpv 启动失败（Worker 信号回调）"""
+        """mpv 启动/连接失败：清理并显示错误。"""
         logger.error("mpv launch failed: %s", error_msg)
-
-        # 显示错误信息
+        self._stop_mpv_process()
         self._display_stack.setCurrentIndex(0)
         self.video_label.setText(f"mpv launch failed: {error_msg}")
-
-        # 清理 Worker
-        if self._mpv_launch_worker:
-            self._mpv_launch_worker.cleanup()
-            self._mpv_launch_worker.deleteLater()
-            self._mpv_launch_worker = None
 
         # 标记加载失败
         self._has_video = False

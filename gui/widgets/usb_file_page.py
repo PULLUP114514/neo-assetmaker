@@ -307,6 +307,7 @@ class UsbFilePage(QWidget):
         self._upload_worker.upload_failed.connect(
             lambda e, n=name: self._on_drop_upload_failed(e, n)
         )
+        self._track_worker(self._upload_worker)
         self._upload_worker.start()
 
     def _on_drop_upload_failed(self, error, name: str):
@@ -346,6 +347,26 @@ class UsbFilePage(QWidget):
         self.btnGoUp.setEnabled(enabled and self._current_path != "/")
         self.fileList.setEnabled(enabled)
 
+    def _track_worker(self, worker):
+        """Dispose a finished background worker so parented QThreads don't pile up.
+
+        Qt only frees child QObjects when the parent (this page) is destroyed, so
+        each finished per-operation worker would otherwise leak for the page's
+        lifetime. Connect QThread.finished -> deleteLater and drop our reference.
+        """
+        def _cleanup():
+            for attr in (
+                "_list_worker", "_upload_worker", "_download_worker",
+                "_delete_worker", "_copy_worker", "_move_worker",
+                "_stat_worker", "_mkdir_worker",
+            ):
+                if getattr(self, attr, None) is worker:
+                    setattr(self, attr, None)
+            worker.deleteLater()
+
+        worker.finished.connect(_cleanup)
+        return worker
+
     def shutdown(self):
         """Wait for all background workers"""
         for worker in [
@@ -377,6 +398,7 @@ class UsbFilePage(QWidget):
         )
         self._list_worker.list_completed.connect(self._on_list_loaded)
         self._list_worker.list_failed.connect(self._on_list_failed)
+        self._track_worker(self._list_worker)
         self._list_worker.start()
 
     def _on_list_loaded(self, files: list, dirs: list):
@@ -472,6 +494,7 @@ class UsbFilePage(QWidget):
         self._upload_worker.progress_updated.connect(self._on_task_progress)
         self._upload_worker.upload_completed.connect(self._on_upload_done)
         self._upload_worker.upload_failed.connect(self._on_upload_failed)
+        self._track_worker(self._upload_worker)
         self._upload_worker.start()
 
     def _on_upload_folder(self):
@@ -497,6 +520,7 @@ class UsbFilePage(QWidget):
         self._upload_worker.progress_updated.connect(self._on_task_progress)
         self._upload_worker.upload_completed.connect(self._on_upload_done)
         self._upload_worker.upload_failed.connect(self._on_upload_failed)
+        self._track_worker(self._upload_worker)
         self._upload_worker.start()
 
     def _on_upload_done(self, remote_path: str):
@@ -568,6 +592,12 @@ class UsbFilePage(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        # Gate the whole multi-item delete: set_busy disables the other USB
+        # buttons so a concurrent worker cannot drive the shared UsbResponderClient
+        # while the delete loop is running (root cause of the file-manager crash).
+        ctrl.set_busy(True)
+        ctrl.progressBar.setVisible(True)
+        ctrl.progressBar.setValue(0)
         self._pending_deletes = selected
         self._delete_next()
 
@@ -575,6 +605,7 @@ class UsbFilePage(QWidget):
         """Delete items one at a time (sequential)"""
         if not self._pending_deletes:
             self.controller.set_busy(False)
+            self.controller.progressBar.setVisible(False)
             self.controller.progressLabel.setText("")
             InfoBar.success(
                 "删除完成",
@@ -599,6 +630,7 @@ class UsbFilePage(QWidget):
         self._delete_worker.delete_failed.connect(
             lambda e: self._on_delete_one_failed(e, item["name"])
         )
+        self._track_worker(self._delete_worker)
         self._delete_worker.start()
 
     def _on_delete_one_failed(self, error, name: str):
@@ -677,6 +709,7 @@ class UsbFilePage(QWidget):
         self._download_worker.download_failed.connect(
             lambda e: self._on_download_one_failed(e, name)
         )
+        self._track_worker(self._download_worker)
         self._download_worker.start()
 
     def _on_download_one_failed(self, error, name: str):
@@ -720,6 +753,7 @@ class UsbFilePage(QWidget):
             ctrl.usbRC, src_path, dst.strip(), parent=self)
         self._copy_worker.copy_completed.connect(self._on_copy_done)
         self._copy_worker.copy_failed.connect(self._on_copy_failed)
+        self._track_worker(self._copy_worker)
         self._copy_worker.start()
 
     def _on_copy_done(self):
@@ -802,6 +836,7 @@ class UsbFilePage(QWidget):
         self._move_worker.move_failed.connect(
             lambda e, n=entry["name"]: self._on_move_one_failed(e, n)
         )
+        self._track_worker(self._move_worker)
         self._move_worker.start()
 
     def _on_move_one_failed(self, error, name: str):
@@ -855,6 +890,7 @@ class UsbFilePage(QWidget):
         self._stat_worker.stat_completed.connect(
             lambda info, n=name: self._on_stat_done(n, info))
         self._stat_worker.stat_failed.connect(self._on_stat_failed)
+        self._track_worker(self._stat_worker)
         self._stat_worker.start()
 
     _STAT_LABELS = {
@@ -942,6 +978,7 @@ class UsbFilePage(QWidget):
         self._mkdir_worker = UsbMkdirWorker(ctrl.usbRC, path, parent=self)
         self._mkdir_worker.mkdir_completed.connect(self._on_mkdir_done)
         self._mkdir_worker.mkdir_failed.connect(self._on_mkdir_failed)
+        self._track_worker(self._mkdir_worker)
         self._mkdir_worker.start()
 
     def _on_mkdir_done(self):
