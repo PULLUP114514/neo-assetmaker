@@ -19,7 +19,7 @@ try:
 except ImportError:
     HAS_CV2 = False
 
-from PyQt6.QtCore import QCoreApplication, QPoint, QProcess, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QPoint, QProcess, QSize, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QGuiApplication,
     QImage,
@@ -121,6 +121,7 @@ class VideoPreviewWidget(QWidget):
         self._mpv_socket: Optional[QLocalSocket] = None
         self._mpv_ipc_server = ""
         self._mpv_ipc_attempts = 0  # async IPC-connect retry counter
+        self._mpv_ipc_connected = False  # True once the IPC socket has connected
         self._media_toolchain = MediaToolchain.discover()
         self._has_video = False
         self._loop_frame: Optional[np.ndarray] = None
@@ -286,6 +287,7 @@ class VideoPreviewWidget(QWidget):
         """mpv 进程已启动 → 开始异步连接其 JSON IPC 服务器。"""
         logger.debug("mpv process started, connecting IPC...")
         self._mpv_ipc_attempts = 0
+        self._mpv_ipc_connected = False
         self._try_mpv_ipc_connect()
 
     def _try_mpv_ipc_connect(self):
@@ -302,16 +304,23 @@ class VideoPreviewWidget(QWidget):
     def _on_mpv_ipc_connected(self):
         """IPC 连接成功，应用旋转设置。"""
         logger.info("mpv IPC connected after %d attempt(s)", self._mpv_ipc_attempts)
+        self._mpv_ipc_connected = True
         if self._rotation:
             self._send_mpv_command(["set_property", "video-rotate", self._rotation])
 
     def _on_mpv_ipc_error(self, _err):
-        """本次 IPC 连接失败：丢弃该 socket，在预算内异步重试。"""
+        """IPC socket 出错：区分"从未连上(重试)"与"连上后断开(mpv 正常退出，勿重试)"。"""
         socket = self._mpv_socket
         if socket is not None:
             socket.abort()
             socket.deleteLater()
             self._mpv_socket = None
+        # A post-connect error means mpv closed the pipe (e.g. a normal quit), not a
+        # failed initial connect — do NOT re-enter the retry loop or show a spurious
+        # "mpv IPC connection failed".
+        if self._mpv_ipc_connected:
+            logger.debug("mpv IPC closed after a successful connection")
+            return
         if self._mpv_process is None:
             return  # 已停止
         if self._mpv_ipc_attempts >= _MPV_IPC_MAX_ATTEMPTS:
@@ -500,11 +509,17 @@ class VideoPreviewWidget(QWidget):
         rgb = np.ascontiguousarray(rgb)
         h, w = rgb.shape[:2]
         qimage = QImage(rgb.data, w, h, rgb.strides[0], QImage.Format.Format_RGB888)
+        # Build the pixmap at the device pixel ratio so the preview is sharp on HiDPI
+        # displays (scaling only to the logical size renders at half resolution).
+        dpr = self.video_label.devicePixelRatioF()
+        logical = self.video_label.size()
+        physical = QSize(round(logical.width() * dpr), round(logical.height() * dpr))
         pixmap = QPixmap.fromImage(qimage.copy()).scaled(
-            self.video_label.size(),
+            physical,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
+        pixmap.setDevicePixelRatio(dpr)
         self.video_label.setPixmap(pixmap)
         self._update_display_geometry(self.video_label, w, h)
         self.frame_changed.emit(self.current_frame_index)
@@ -673,7 +688,10 @@ class VideoPreviewWidget(QWidget):
             logger.debug("OpenGL preview path is retired for mpv playback")
 
     def set_rotation(self, degrees: int):
-        degrees = degrees % 360
+        # Snap to a cardinal angle: mpv video-rotate and the VapourSynth export only
+        # support 0/90/180/270, so keep preview and export in lockstep and never let an
+        # arbitrary angle through the UI (timeline SpinBox also steps by 90).
+        degrees = (round(int(degrees) / 90) * 90) % 360
         if self._rotation == degrees:
             return
         self._rotation = degrees
